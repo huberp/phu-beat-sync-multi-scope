@@ -1,0 +1,157 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Download pluginval
+        shell: pwsh
+        run: |
+          Write-Host "Downloading pluginval..."
+          Invoke-WebRequest `
+            -Uri "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip" `
+            -OutFile "pluginval.zip"
+          Write-Host "Extracting pluginval..."
+          Expand-Archive -Path "pluginval.zip" -DestinationPath "pluginval" -Force
+          Write-Host "pluginval downloaded and extracted successfully"
+
+      - name: Validate VST3 Plugin
+        id: validate
+        shell: bash
+        run: |
+          set +e  # Don't exit on error, we want to capture the result
+
+          # Find the VST3 plugin (JUCE uses British spelling "artefacts")
+          VST3_PATH=$(find build/src/phu-beat-sync-multi-scope_artefacts/Release/VST3 \
+            -name "*.vst3" -type d | head -n 1)
+
+          if [ -z "$VST3_PATH" ]; then
+            echo "ERROR: VST3 plugin not found!"
+            echo "validation_status=no_plugin" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "Found VST3 plugin at: $VST3_PATH"
+
+          # Check if pluginval.exe exists and is executable
+          if [ ! -f "./pluginval/pluginval.exe" ]; then
+            echo "ERROR: pluginval.exe not found at ./pluginval/pluginval.exe"
+            echo "validation_status=no_pluginval" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Create validation results directory
+          mkdir -p ./validation-results
+
+          # Run pluginval
+          ./pluginval/pluginval.exe \
+            --strictness-level 5 \
+            --validate-in-process \
+            --output-dir ./validation-results \
+            --validate "$VST3_PATH" 2>&1 | \
+            tee ./validation-results/console-output.txt
+
+          VALIDATION_EXIT_CODE=${PIPESTATUS[0]}
+
+          echo "Validation exit code: $VALIDATION_EXIT_CODE"
+
+          if [ $VALIDATION_EXIT_CODE -eq 0 ]; then
+            echo "validation_status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "validation_status=failed" >> $GITHUB_OUTPUT
+          fi
+
+          exit 0  # Don't fail yet, we want to upload artifacts first
+
+      - name: Upload Validation Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-results
+          path: ./validation-results/
+
+      - name: Add Summary to Job Summary
+        if: always()
+        shell: bash
+        run: |
+          VALIDATION_STATUS="${{ steps.validate.outputs.validation_status }}"
+
+          echo "## VST3 Plugin Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$VALIDATION_STATUS" == "passed" ]; then
+            echo "### ✅ Validation Passed" >> $GITHUB_STEP_SUMMARY
+          elif [ "$VALIDATION_STATUS" == "failed" ]; then
+            echo "### ❌ Validation Failed" >> $GITHUB_STEP_SUMMARY
+          elif [ "$VALIDATION_STATUS" == "no_plugin" ]; then
+            echo "### ⚠️ VST3 Plugin Not Found" >> $GITHUB_STEP_SUMMARY
+          elif [ "$VALIDATION_STATUS" == "no_pluginval" ]; then
+            echo "### ⚠️ Pluginval Not Found" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ⚠️ No Results" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Add first 50 lines of validation report if it exists
+          if [ -f "./validation-results/console-output.txt" ]; then
+            echo "#### Validation Report (first 50 lines):" \
+              >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -n 50 ./validation-results/console-output.txt \
+              >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📦 Full validation results available in artifacts." \
+            >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail Build on Validation Failure
+        if: always()
+        shell: bash
+        run: |
+          VALIDATION_STATUS="${{ steps.validate.outputs.validation_status }}"
+
+          if [ "$VALIDATION_STATUS" == "failed" ]; then
+            echo "Build failed: Plugin validation failed"
+            exit 1
+          elif [ "$VALIDATION_STATUS" == "no_plugin" ]; then
+            echo "Build failed: VST3 plugin not found"
+            exit 1
+          elif [ "$VALIDATION_STATUS" == "no_pluginval" ]; then
+            echo "Build failed: pluginval.exe not found"
+            exit 1
+          fi
+
+          echo "Validation passed successfully"
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Install Dependencies
+      run: sudo bash scripts/install-linux-deps.sh
+    - name: Configure CMake
+      run: cmake --preset linux-release
+    - name: Build
+      run: cmake --build --preset linux-build
