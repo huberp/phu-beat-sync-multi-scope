@@ -110,5 +110,10 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     std::atomic<bool> m_broadcastEnabled{false};
     std::atomic<bool> m_receiveEnabled{true};
 
+    // Beat-driven broadcast: audio thread sets flag at quarter-beat boundaries
+    std::atomic<bool> m_broadcastReady{false};
+    double m_lastBroadcastPpq = 0.0;  // audio-thread only
+    static constexpr double BROADCAST_BEAT_INTERVAL = 0.25; // broadcast every 1/4 beat
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhuBeatSyncMultiScopeAudioProcessor)
 };

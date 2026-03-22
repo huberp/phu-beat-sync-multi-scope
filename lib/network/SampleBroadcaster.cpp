@@ -164,27 +164,27 @@ void SampleBroadcaster::receiverThreadRun() {
 }
 
 // ============================================================================
-// Sample Compression (dB-domain 8-bit quantization)
+// Sample Compression (linear 8-bit quantization)
 // ============================================================================
 
 void SampleBroadcaster::compressSamples(const float* input, int inputBins,
                                         uint8_t* output, int outputBins) {
-    const float dbRange = DB_CEILING - DB_FLOOR; // 60 dB
+    // Quantize linear samples [-1, +1] to 8-bit [0, 255]
+    // 0 → -1.0, 128 → 0.0, 255 → +1.0
+    auto quantize = [](float sample) -> uint8_t {
+        float normalized = (sample + 1.0f) * 0.5f; // [-1,+1] → [0,1]
+        normalized = (std::max)(0.0f, (std::min)(1.0f, normalized));
+        return static_cast<uint8_t>(normalized * 255.0f);
+    };
 
     if (inputBins <= outputBins) {
-        // No downsampling needed — just dB-quantize each bin
-        for (int i = 0; i < inputBins; ++i) {
-            float dB = input[i]; // Already in dB scale from BeatSyncBuffer
-            float normalized = (dB - DB_FLOOR) / dbRange; // [0, 1] for [-60, 0] dB
-            normalized = (std::max)(0.0f, (std::min)(1.0f, normalized));
-            output[i] = static_cast<uint8_t>(normalized * 255.0f);
-        }
-        // Fill remaining bins with zero (silence)
-        for (int i = inputBins; i < outputBins; ++i) {
-            output[i] = 0;
-        }
+        for (int i = 0; i < inputBins; ++i)
+            output[i] = quantize(input[i]);
+        // Fill remaining bins with midpoint (silence = 0.0)
+        for (int i = inputBins; i < outputBins; ++i)
+            output[i] = 128;
     } else {
-        // Downsample by picking nearest-neighbor bins
+        // Downsample: pick sample with largest absolute value in each range
         float binRatio = static_cast<float>(inputBins) / static_cast<float>(outputBins);
         for (int i = 0; i < outputBins; ++i) {
             float start = static_cast<float>(i) * binRatio;
@@ -192,28 +192,24 @@ void SampleBroadcaster::compressSamples(const float* input, int inputBins,
             int startBin = static_cast<int>(start);
             int endBin = (std::min)(static_cast<int>(std::ceil(end)), inputBins);
 
-            // Take max dB in this range (peak-hold for waveform visibility)
-            float maxDb = DB_FLOOR;
+            float peakSample = 0.0f;
             for (int j = startBin; j < endBin; ++j) {
-                if (input[j] > maxDb)
-                    maxDb = input[j];
+                if (std::abs(input[j]) > std::abs(peakSample))
+                    peakSample = input[j];
             }
-
-            float normalized = (maxDb - DB_FLOOR) / dbRange;
-            normalized = (std::max)(0.0f, (std::min)(1.0f, normalized));
-            output[i] = static_cast<uint8_t>(normalized * 255.0f);
+            output[i] = quantize(peakSample);
         }
     }
 }
 
 void SampleBroadcaster::decompressSamples(const uint8_t* input, int numBins,
                                           std::vector<float>& output) {
-    const float dbRange = DB_CEILING - DB_FLOOR; // 60 dB
+    // Dequantize 8-bit [0, 255] back to linear [-1, +1]
     output.resize(static_cast<size_t>(numBins));
 
     for (int i = 0; i < numBins; ++i) {
         float normalized = static_cast<float>(input[i]) / 255.0f; // [0, 1]
-        output[static_cast<size_t>(i)] = normalized * dbRange + DB_FLOOR; // [-60, 0] dB
+        output[static_cast<size_t>(i)] = normalized * 2.0f - 1.0f; // [-1, +1]
     }
 }
 

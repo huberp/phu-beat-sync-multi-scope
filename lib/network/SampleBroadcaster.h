@@ -43,12 +43,6 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     /** Maximum sample bins to transmit per packet. */
     static constexpr int MAX_SAMPLE_BINS = 1024;
 
-    /** dB floor for quantization. Values below this are silence. */
-    static constexpr float DB_FLOOR = -60.0f;
-
-    /** dB ceiling for quantization. */
-    static constexpr float DB_CEILING = 0.0f;
-
     /** Time in milliseconds after which a remote instance is considered stale. */
     static constexpr int64_t STALE_TIMEOUT_MS = 3000;
 
@@ -63,13 +57,13 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
         double bpm;                        // Current BPM for receiver display sync
         float displayRangeBeats;           // Musical range this buffer covers
         uint16_t numBins;                  // Number of sample bins (up to MAX_SAMPLE_BINS)
-        uint8_t samples[MAX_SAMPLE_BINS];  // dB-quantized waveform data (0-255)
+        uint8_t samples[MAX_SAMPLE_BINS];  // 8-bit quantized waveform data (0-255)
     };
     #pragma pack(pop)
 
     /**
      * Received sample data from a remote plugin instance (unpacked for rendering).
-     * Values are in dB scale, suitable for direct oscilloscope rendering.
+     * Values are raw linear samples [-1, +1], suitable for direct oscilloscope rendering.
      */
     struct RemoteSampleData {
         uint32_t instanceID = 0;
@@ -77,7 +71,7 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
         double ppqPosition = 0.0;
         double bpm = 0.0;
         float displayRangeBeats = 1.0f;
-        std::vector<float> samples; ///< dB-scale values (same domain as BeatSyncBuffer)
+        std::vector<float> samples; ///< linear sample values [-1, +1]
     };
 
     SampleBroadcaster();
@@ -101,9 +95,9 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
 
     /**
      * Broadcast beat-synced sample data to all instances on the multicast group.
-     * Sample values are compressed to dB-domain 8-bit quantization before sending.
+     * Sample values are compressed to 8-bit quantization before sending.
      *
-     * @param sampleData   BeatSyncBuffer data array (dB scale)
+     * @param sampleData   BeatSyncBuffer data array (linear [-1, +1])
      * @param numBins      Number of bins in the sample data array
      * @param ppqPosition  Current PPQ position for beat sync alignment
      * @param bpm          Current BPM
@@ -145,13 +139,12 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     std::map<uint32_t, RemoteSampleData> latestSamples;
 
     /**
-     * Compress dB-scale sample values to 8-bit quantization.
-     * Maps [DB_FLOOR, DB_CEILING] dB to [0, 255]. Values below DB_FLOOR become 0.
+     * Compress linear sample values [-1, +1] to 8-bit quantization [0, 255].
      */
     void compressSamples(const float* input, int inputBins, uint8_t* output, int outputBins);
 
     /**
-     * Decompress 8-bit quantized values back to dB-scale sample values.
+     * Decompress 8-bit quantized values back to linear sample values [-1, +1].
      */
     void decompressSamples(const uint8_t* input, int numBins, std::vector<float>& output);
 };

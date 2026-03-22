@@ -21,7 +21,7 @@ class BeatSyncBuffer {
     BeatSyncBuffer() = default;
 
     /** Allocate bins. Call from prepareToPlay (not real-time). */
-    void prepare(int numBins, float clearValue = -60.0f) {
+    void prepare(int numBins, float clearValue = 0.0f) {
         m_bins.resize(static_cast<size_t>(numBins), clearValue);
         m_numBins = numBins;
         clear(clearValue);
@@ -37,7 +37,7 @@ class BeatSyncBuffer {
     }
 
     /** Reset all bins to a given value. Not real-time safe. */
-    void clear(float value = -60.0f) {
+    void clear(float value = 0.0f) {
         std::fill(m_bins.begin(), m_bins.end(), value);
     }
 
@@ -49,7 +49,7 @@ class BeatSyncBuffer {
 
     /** Bounds-checked single-bin read. */
     float getBin(int index) const {
-        if (index < 0 || index >= m_numBins) return -60.0f;
+        if (index < 0 || index >= m_numBins) return 0.0f;
         return m_bins[static_cast<size_t>(index)];
     }
 

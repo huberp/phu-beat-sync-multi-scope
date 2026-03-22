@@ -47,7 +47,7 @@ void ScopeDisplay::paint(juce::Graphics& g) {
     }
 
     // Local waveform (on top)
-    if (!m_localData.empty()) {
+    if (m_showLocal && !m_localData.empty()) {
         drawWaveform(g, bounds, m_localData.data(),
                      static_cast<int>(m_localData.size()),
                      juce::Colour(0xFF00FF88), 1.0f);
@@ -68,10 +68,10 @@ void ScopeDisplay::paint(juce::Graphics& g) {
 void ScopeDisplay::drawGrid(juce::Graphics& g, juce::Rectangle<float> area) {
     g.setColour(juce::Colour(0xFF333355));
 
-    // Horizontal grid lines at dB levels
-    const float dbLevels[] = {0.0f, -6.0f, -12.0f, -24.0f, -36.0f, -48.0f, -60.0f};
-    for (float db : dbLevels) {
-        float y = dbToY(db, area.getY(), area.getHeight());
+    // Horizontal grid lines at linear levels
+    const float levels[] = {1.0f, 0.5f, 0.0f, -0.5f, -1.0f};
+    for (float lv : levels) {
+        float y = sampleToY(lv, area.getY(), area.getHeight());
         g.drawHorizontalLine(static_cast<int>(y), area.getX(), area.getRight());
     }
 
@@ -86,14 +86,15 @@ void ScopeDisplay::drawGrid(juce::Graphics& g, juce::Rectangle<float> area) {
         }
     }
 
-    // dB labels
+    // Linear labels
     g.setColour(juce::Colour(0xFF666688));
     g.setFont(10.0f);
-    const float labelDbLevels[] = {0.0f, -12.0f, -24.0f, -48.0f};
-    for (float db : labelDbLevels) {
-        float y = dbToY(db, area.getY(), area.getHeight());
-        g.drawText(juce::String(static_cast<int>(db)) + " dB",
-                   static_cast<int>(area.getX() + 2), static_cast<int>(y - 6), 40, 12,
+    const float labelLevels[] = {1.0f, 0.5f, 0.0f, -0.5f, -1.0f};
+    for (float lv : labelLevels) {
+        float y = sampleToY(lv, area.getY(), area.getHeight());
+        juce::String text = (lv == 0.0f) ? "0" : juce::String(lv, 1);
+        g.drawText(text,
+                   static_cast<int>(area.getX() + 2), static_cast<int>(y - 6), 30, 12,
                    juce::Justification::centredLeft);
     }
 }
@@ -113,7 +114,7 @@ void ScopeDisplay::drawWaveform(juce::Graphics& g, juce::Rectangle<float> area,
     for (int i = 0; i < numBins; ++i) {
         float x = area.getX() + (static_cast<float>(i) / static_cast<float>(numBins - 1)) *
                                      area.getWidth();
-        float y = dbToY(data[i], area.getY(), area.getHeight());
+        float y = sampleToY(data[i], area.getY(), area.getHeight());
 
         if (!started) {
             path.startNewSubPath(x, y);
@@ -147,13 +148,11 @@ void ScopeDisplay::drawPlayhead(juce::Graphics& g, juce::Rectangle<float> area) 
 // Helpers
 // ============================================================================
 
-float ScopeDisplay::dbToY(float db, float top, float height) {
-    // Map [-60, 0] dB to [bottom, top]
-    const float dbFloor = -60.0f;
-    const float dbCeiling = 0.0f;
-    float normalized = (db - dbFloor) / (dbCeiling - dbFloor); // [0, 1]
+float ScopeDisplay::sampleToY(float sample, float top, float height) {
+    // Map [-1, +1] to [bottom, top]: +1 at top, -1 at bottom
+    float normalized = (sample + 1.0f) * 0.5f; // [-1,+1] → [0,1]
     normalized = juce::jlimit(0.0f, 1.0f, normalized);
-    return top + (1.0f - normalized) * height; // Invert: 0 dB at top
+    return top + (1.0f - normalized) * height;
 }
 
 juce::Colour ScopeDisplay::getRemoteColour(int index) {

@@ -15,9 +15,9 @@ using phu::network::SampleBroadcaster;
  * Also renders remote waveform data received via SampleBroadcaster, with an option
  * to show/hide remote traces (following the pattern from phu-splitter).
  *
- * The display shows dB-scale waveform data mapped to pixel coordinates:
+ * The display shows raw audio sample data mapped to pixel coordinates:
  * - X axis: musical position [0, 1) normalized within display range
- * - Y axis: dB level [-60, 0] mapped to component height
+ * - Y axis: sample amplitude [-1, +1] mapped to component height
  * - Playhead marker showing current PPQ position
  */
 class ScopeDisplay : public juce::Component {
@@ -32,6 +32,10 @@ class ScopeDisplay : public juce::Component {
 
     /** Set remote waveform data received from other instances. */
     void setRemoteData(const std::vector<SampleBroadcaster::RemoteSampleData>& remoteData);
+
+    /** Enable or disable rendering of local data (toggle). */
+    void setLocalDisplayEnabled(bool enabled) { m_showLocal = enabled; }
+    bool isLocalDisplayEnabled() const { return m_showLocal; }
 
     /** Enable or disable rendering of remote data (toggle). */
     void setRemoteDisplayEnabled(bool enabled) { m_showRemote = enabled; }
@@ -51,6 +55,7 @@ class ScopeDisplay : public juce::Component {
     std::vector<SampleBroadcaster::RemoteSampleData> m_remoteData;
 
     // Display state
+    bool m_showLocal = true;
     bool m_showRemote = true;
     double m_currentPpq = 0.0;
     double m_displayRangeBeats = 4.0;
@@ -61,8 +66,8 @@ class ScopeDisplay : public juce::Component {
                       const float* data, int numBins, juce::Colour colour, float alpha = 1.0f);
     void drawPlayhead(juce::Graphics& g, juce::Rectangle<float> area);
 
-    // Map dB value to Y coordinate
-    static float dbToY(float db, float top, float height);
+    // Map raw sample value [-1, +1] to Y coordinate
+    static float sampleToY(float sample, float top, float height);
 
     // Colour palette for remote instances
     static juce::Colour getRemoteColour(int index);

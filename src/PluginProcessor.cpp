@@ -21,8 +21,8 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
     // Initialize sample broadcaster networking
     m_sampleBroadcaster.initialize();
 
-    // Start timer for broadcast duties (~10 Hz is enough for waveform updates)
-    startTimerHz(10);
+    // Start timer for broadcast duties (~30 Hz for responsive beat-driven sending)
+    startTimerHz(30);
 }
 
 PhuBeatSyncMultiScopeAudioProcessor::~PhuBeatSyncMultiScopeAudioProcessor() {
@@ -101,20 +101,26 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
             double normPos = std::fmod(ppq_i, displayRange) / displayRange;
             if (normPos < 0.0) normPos += 1.0;
 
-            // Convert to dB (mono mix)
+            // Raw mono mix (no dB conversion — display as-is)
             float monoIn = 0.0f;
             for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch)
                 monoIn += buffer.getSample(ch, i);
             monoIn /= static_cast<float>(juce::jmin(numChannels, 2));
 
-            float absIn = std::abs(monoIn);
-            float inDb = (absIn > 1e-10f) ? 20.0f * std::log10(absIn) : -60.0f;
-            inDb = juce::jmax(inDb, -60.0f);
-
-            m_inputSyncBuf.write(normPos, inDb);
+            m_inputSyncBuf.write(normPos, monoIn);
         }
 
         m_syncGlobals.setPpqEndOfBlock(blockPpq + numSamples * ppqPerSample);
+
+        // Beat-driven broadcast: signal when a quarter-beat boundary is crossed
+        double endPpq = blockPpq + numSamples * ppqPerSample;
+        if (m_broadcastEnabled.load(std::memory_order_relaxed)) {
+            double elapsed = endPpq - m_lastBroadcastPpq;
+            if (elapsed >= BROADCAST_BEAT_INTERVAL || elapsed < 0.0) {
+                m_broadcastReady.store(true, std::memory_order_relaxed);
+                m_lastBroadcastPpq = endPpq;
+            }
+        }
     }
 
     m_syncGlobals.finishRun(numSamples);
@@ -125,8 +131,8 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
 // ============================================================================
 
 void PhuBeatSyncMultiScopeAudioProcessor::timerCallback() {
-    // Broadcast beat-synced waveform data if enabled
-    if (m_broadcastEnabled.load()) {
+    // Broadcast beat-synced waveform data when a quarter-beat boundary was crossed
+    if (m_broadcastEnabled.load() && m_broadcastReady.exchange(false)) {
         double ppq = m_syncGlobals.getPpqEndOfBlock();
         double bpm = m_syncGlobals.getBPM();
         float displayRange = static_cast<float>(m_displayRangeBeats.load());

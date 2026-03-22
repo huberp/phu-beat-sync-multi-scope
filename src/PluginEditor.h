@@ -31,6 +31,7 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor : public juce::AudioProcessorEdi
 
     // Remote waveform controls (following phu-splitter pattern)
     juce::GroupComponent remoteGroup;
+    juce::ToggleButton localDisplayToggle;    // Show/hide local waveform
     juce::ToggleButton remoteDisplayToggle;  // Show/hide remote waveforms
     juce::ToggleButton broadcastToggle;       // Enable/disable broadcasting
 

@@ -49,6 +49,14 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
     remoteGroup.setText("Network");
     addAndMakeVisible(remoteGroup);
 
+    localDisplayToggle.setButtonText("Show Local");
+    localDisplayToggle.setToggleState(true, juce::dontSendNotification);
+    localDisplayToggle.onClick = [this]() {
+        scopeDisplay.setLocalDisplayEnabled(localDisplayToggle.getToggleState());
+        scopeDisplay.repaint();
+    };
+    addAndMakeVisible(localDisplayToggle);
+
     remoteDisplayToggle.setButtonText("Show Remote");
     remoteDisplayToggle.setToggleState(true, juce::dontSendNotification);
     remoteDisplayToggle.onClick = [this]() {
@@ -129,22 +137,28 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     area.removeFromTop(40);
 
     // Controls strip (top)
-    auto controlStrip = area.removeFromTop(36);
+    auto controlStrip = area.removeFromTop(56);
     controlStrip.reduce(10, 3);
 
-    // Display range
-    displayRangeLabel.setBounds(controlStrip.removeFromLeft(50));
-    displayRangeCombo.setBounds(controlStrip.removeFromLeft(100));
+    // Display range (vertically centred in strip)
+    auto rangeArea = controlStrip.removeFromLeft(160);
+    int rangeY = rangeArea.getY() + (rangeArea.getHeight() - 24) / 2;
+    displayRangeLabel.setBounds(rangeArea.getX(), rangeY, 50, 24);
+    displayRangeCombo.setBounds(rangeArea.getX() + 55, rangeY, 100, 24);
 
     controlStrip.removeFromLeft(20); // Spacing
 
     // Remote controls group
-    auto remoteArea = controlStrip.removeFromLeft(300);
+    auto remoteArea = controlStrip.removeFromLeft(420);
     remoteGroup.setBounds(remoteArea);
-    remoteArea.reduce(10, 14);
-    remoteDisplayToggle.setBounds(remoteArea.removeFromLeft(130));
-    remoteArea.removeFromLeft(10);
-    broadcastToggle.setBounds(remoteArea.removeFromLeft(130));
+    auto remoteContent = remoteArea.reduced(10, 0);
+    remoteContent.removeFromTop(16); // Space for group title
+    remoteContent.removeFromBottom(4);
+    localDisplayToggle.setBounds(remoteContent.removeFromLeft(100));
+    remoteContent.removeFromLeft(6);
+    remoteDisplayToggle.setBounds(remoteContent.removeFromLeft(110));
+    remoteContent.removeFromLeft(6);
+    broadcastToggle.setBounds(remoteContent.removeFromLeft(110));
 
     // Main display area
     area.reduce(10, 5);
