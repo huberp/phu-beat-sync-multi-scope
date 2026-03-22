@@ -209,11 +209,11 @@ void SampleBroadcaster::compressSamples(const float* input, int inputBins,
 void SampleBroadcaster::decompressSamples(const uint8_t* input, int numBins,
                                           std::vector<float>& output) {
     const float dbRange = DB_CEILING - DB_FLOOR; // 60 dB
-    output.resize(numBins);
+    output.resize(static_cast<size_t>(numBins));
 
     for (int i = 0; i < numBins; ++i) {
         float normalized = static_cast<float>(input[i]) / 255.0f; // [0, 1]
-        output[i] = normalized * dbRange + DB_FLOOR;               // [-60, 0] dB
+        output[static_cast<size_t>(i)] = normalized * dbRange + DB_FLOOR; // [-60, 0] dB
     }
 }
 
