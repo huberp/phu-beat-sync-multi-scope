@@ -1,0 +1,114 @@
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <thread>
+
+namespace phu {
+namespace network {
+
+// Forward declare socket type to avoid including platform headers
+#ifdef _WIN32
+    using mcast_socket_t = unsigned long long; // SOCKET type on Windows
+#else
+    using mcast_socket_t = int;
+#endif
+
+/**
+ * MulticastBroadcasterBase: common UDP multicast infrastructure shared by
+ * SampleBroadcaster and any future broadcaster subclasses.
+ *
+ * Provides:
+ * - Socket creation, multicast join/leave, and cleanup
+ * - WSA initialization on Windows (reference-counted, shared across instances)
+ * - Instance ID generation
+ * - Lifecycle management (initialize / shutdown)
+ * - Receiver thread management
+ *
+ * Subclasses must implement:
+ * - receiverThreadRun()  — the loop that reads from recvSocket
+ * - onShutdown()         — optional cleanup hook (called during shutdown)
+ */
+class MulticastBroadcasterBase {
+  public:
+    /** Default multicast group (administratively scoped, local org). */
+    static constexpr const char* DEFAULT_MULTICAST_GROUP = "239.255.42.1";
+
+    MulticastBroadcasterBase(const char* multicastGroup, int port);
+    virtual ~MulticastBroadcasterBase();
+
+    // Non-copyable / non-movable
+    MulticastBroadcasterBase(const MulticastBroadcasterBase&) = delete;
+    MulticastBroadcasterBase& operator=(const MulticastBroadcasterBase&) = delete;
+
+    // ---- Lifecycle --------------------------------------------------------
+
+    /**
+     * Initialize networking (sockets, multicast group membership) and start
+     * the receiver thread.  Safe to call multiple times.
+     */
+    bool initialize();
+
+    /**
+     * Shutdown networking, stop receiver thread, call onShutdown().
+     * Blocks until the receiver thread has stopped.
+     */
+    void shutdown();
+
+    /** Whether the broadcaster is initialized and the receiver thread running. */
+    bool isRunning() const { return running.load(); }
+
+    /** This instance's unique ID (randomly generated on construction). */
+    uint32_t getInstanceID() const { return instanceID; }
+
+  protected:
+    // ---- Subclass hooks ---------------------------------------------------
+
+    /** Receiver thread main loop.  Must honour running flag. */
+    virtual void receiverThreadRun() = 0;
+
+    /** Called during shutdown() after the receiver thread has joined.
+     *  Override to clear subclass-specific state. Default is a no-op. */
+    virtual void onShutdown() {}
+
+    // ---- Networking state (accessible to subclasses) ----------------------
+
+    mcast_socket_t sendSocket;
+    mcast_socket_t recvSocket;
+    void* multicastAddr;     ///< sockaddr_in* (opaque pointer)
+    bool networkInitialized;
+
+    // Instance identification
+    uint32_t instanceID;
+
+    // Thread management
+    std::atomic<bool> running{false};
+    std::unique_ptr<std::thread> receiverThread;
+
+    // ---- Utilities --------------------------------------------------------
+
+    /** Milliseconds since epoch (steady_clock). */
+    static int64_t getCurrentTimeMs();
+
+  private:
+    const char* multicastGroup;
+    int multicastPort;
+
+    // Socket helpers
+    bool initializeSockets();
+    void cleanupSockets();
+    static uint32_t generateInstanceID();
+
+#ifdef _WIN32
+    static bool wsaInitialized;
+    static int wsaRefCount;
+    static std::mutex wsaMutex;
+    bool initializeWSA();
+    void cleanupWSA();
+#endif
+};
+
+} // namespace network
+} // namespace phu

@@ -1,0 +1,162 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'   # e.g. v1.0.0, v0.2.1-beta
+
+permissions:
+  contents: write   # needed to create GitHub Releases and upload assets
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build & package Windows VST3
+  # ---------------------------------------------------------------------------
+  release-windows:
+    name: Windows VST3
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure CMake
+        run: cmake --preset vs2026-x64
+
+      - name: Build Release
+        run: cmake --build --preset release
+
+      - name: Validate VST3 with pluginval
+        shell: pwsh
+        run: |
+          Write-Host "Downloading pluginval..."
+          Invoke-WebRequest `
+            -Uri "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip" `
+            -OutFile "pluginval.zip"
+          Expand-Archive -Path "pluginval.zip" -DestinationPath "pluginval" -Force
+
+          $vst3 = Get-ChildItem -Recurse `
+            -Path "build/vs2026-x64/src/phu-beat-sync-multi-scope_artefacts/Release/VST3" `
+            -Filter "*.vst3" -Directory | Select-Object -First 1 -ExpandProperty FullName
+
+          Write-Host "Validating: $vst3"
+          .\pluginval\pluginval.exe --strictness-level 5 --validate-in-process --validate "$vst3"
+
+      - name: Package VST3
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $zipName = "PHU-BEAT-SYNC-MULTI-SCOPE-windows-${version}.zip"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+
+          $vst3 = Get-ChildItem -Recurse `
+            -Path "build/vs2026-x64/src/phu-beat-sync-multi-scope_artefacts/Release/VST3" `
+            -Filter "*.vst3" -Directory | Select-Object -First 1 -ExpandProperty FullName
+
+          Compress-Archive -Path $vst3 -DestinationPath "dist\$zipName" -Force
+          Write-Host "Created dist\$zipName"
+          echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-vst3
+          path: dist/*.zip
+
+  # ---------------------------------------------------------------------------
+  # Build & package Linux VST3
+  # ---------------------------------------------------------------------------
+  release-linux:
+    name: Linux VST3
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Dependencies
+        run: sudo bash scripts/install-linux-deps.sh
+
+      - name: Configure CMake
+        run: cmake --preset linux-release
+
+      - name: Build
+        run: cmake --build --preset linux-build
+
+      - name: Package VST3
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          ZIP_NAME="PHU-BEAT-SYNC-MULTI-SCOPE-linux-${VERSION}.zip"
+          mkdir -p dist
+
+          VST3_PATH=$(find build/linux-release/src/phu-beat-sync-multi-scope_artefacts/Release/VST3 \
+            -name "*.vst3" -type d | head -n 1)
+
+          if [ -z "$VST3_PATH" ]; then
+            echo "ERROR: VST3 bundle not found"
+            exit 1
+          fi
+
+          echo "Packaging: $VST3_PATH"
+          (cd "$(dirname "$VST3_PATH")" && zip -r "$GITHUB_WORKSPACE/dist/$ZIP_NAME" \
+            "$(basename "$VST3_PATH")")
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-vst3
+          path: dist/*.zip
+
+  # ---------------------------------------------------------------------------
+  # Create GitHub Release and attach both zips
+  # ---------------------------------------------------------------------------
+  publish-release:
+    name: Publish GitHub Release
+    needs: [release-windows, release-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-vst3
+          path: dist/
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-vst3
+          path: dist/
+
+      - name: List release assets
+        run: ls -lh dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: phu-beat-sync-multi-scope ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body: |
+            ## phu-beat-sync-multi-scope ${{ github.ref_name }}
+
+            ### Installation
+
+            **Windows** — download `PHU-BEAT-SYNC-MULTI-SCOPE-windows-*.zip`, extract and copy
+            `PHU BEAT SYNC MULTI SCOPE.vst3` to `C:\Program Files\Common Files\VST3\`.
+
+            **Linux** — download `PHU-BEAT-SYNC-MULTI-SCOPE-linux-*.zip`, extract and copy
+            `PHU BEAT SYNC MULTI SCOPE.vst3` to `~/.vst3/`.
+
+            ### What's Changed
+
+            See [CHANGELOG](https://github.com/huberp/phu-beat-sync-multi-scope/commits/${{ github.ref_name }})
+            or compare against the previous tag.
+          files: dist/*.zip
