@@ -35,7 +35,7 @@ A JUCE-based VST3 audio plugin that provides a **beat-synced multi-instance osci
 
 ### Analysis Overlays
 - **RMS Envelope**: blue-glow step lines at every 1/16-note position showing the RMS amplitude of the summed signal (local + all visible remotes). Reflects only the local signal when *Show Remote* is off
-- **Cancellation detector**: fine-grained colour bar at the bottom of the scope (~4 ms resolution) indicating inter-instance phase cancellation — green = in-phase, yellow = partial, red = high cancellation. Noise-floored at −40 dBFS to suppress false readings on silent signals
+- **Cancellation detector**: fine-grained colour bar at the bottom of the scope (~4 ms resolution) indicating inter-instance phase cancellation — green = in-phase, yellow = partial, red = high cancellation. Level-weighted to suppress spurious readings on near-silent signals. See [Cancellation Detector](#cancellation-detector) for the full formula.
 
 ## Installation
 
@@ -139,6 +139,53 @@ receiverBin       = (int)(normPos * REMOTE_ACCUM_BINS)
 ```
 
 Bins are scatter-written into a per-instance 1024-bin accumulation buffer (`m_remoteAccumBuffers`). Unbounded bins from previous packets persist across frames, preventing blinking when the sender has a narrower range than the receiver.
+
+### Cancellation Detector
+
+The cancellation detector measures how much the combined signal of all active instances deviates from the sum of their individual levels — a direct indicator of phase cancellation across tracks.
+
+#### Formula
+
+For each time window of width ~4 ms, the raw cancellation index is:
+
+$$CI = 1 - \frac{\text{RMS}(L + R_1 + R_2 + \cdots)}{\text{RMS}(L) + \text{RMS}(R_1) + \text{RMS}(R_2) + \cdots}$$
+
+The denominator is the maximum RMS the mix *could* have if every instance were perfectly in-phase (triangle inequality). The numerator is the RMS of what you actually get. The ratio is 1 when everything is in-phase and 0 when total cancellation occurs, so $CI \in [0, 1]$.
+
+#### Level weighting
+
+Raw $CI$ values near the noise floor are meaningless — two nearly-silent signals cancelling each other is of no practical concern. A level weight is applied to suppress these spurious readings:
+
+$$CI_w = CI \cdot \sqrt{\min\!\left(1,\;\frac{D}{D_{\text{ref}}}\right)}$$
+
+where $D = \text{RMS}(L) + \sum \text{RMS}(R_i)$ is the total individual energy and $D_{\text{ref}} = 0.1$ (≈ −20 dBFS). The square-root shaping means the weight rises steeply from the noise floor and reaches 1.0 once any slot exceeds −20 dBFS, above which the raw $CI$ is displayed unchanged.
+
+| $D$ | Level weight | Effect on display |
+|---|---|---|
+| 0.01 (−40 dBFS, noise floor) | 0.32 | Strongly suppressed — green |
+| 0.03 (−30 dBFS) | 0.55 | Moderately suppressed |
+| 0.10 (−20 dBFS) | 1.00 | Full CI shown |
+| > 0.10 | 1.00 | No change |
+
+An additional hard noise-floor gate (`sumIndividualRms > 0.01`) skips computation entirely for slots below −40 dBFS, preventing false readings from 8-bit decompression DC offset (~0.004 linear).
+
+#### Colour mapping
+
+The colour bar maps $CI_w$ linearly through three colours:
+
+| $CI_w$ | Colour | Meaning |
+|---|---|---|
+| 0.0 | Green (`#00BB55`) | In-phase — no cancellation |
+| 0.4 | Yellow (`#FFCC00`) | Partial cancellation |
+| 1.0 | Red (`#FF3300`) | Total cancellation |
+
+#### Resolution
+
+256 fixed windows span the full display range, giving a time resolution of approximately:
+
+$$\Delta t \approx \frac{60}{BPM} \cdot \frac{R}{256} \text{ seconds}$$
+
+At 120 BPM with a 4-beat display range: $\Delta t \approx 62.5$ ms. At 1-beat range: $\Delta t \approx 15.6$ ms.
 
 ### Network Protocol
 

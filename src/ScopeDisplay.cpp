@@ -315,8 +315,16 @@ void ScopeDisplay::computeMetrics() {
             // Noise floor at -40 dBFS: prevents false cancellation from 8-bit DC offset (~0.004)
             if (sumIndividualRms > 0.01) {
                 const float rmsSum = std::sqrt((float)(sumSqSum / wCount));
-                m_cancellationIndex[s] = juce::jlimit(
+                const float ci = juce::jlimit(
                     0.0f, 1.0f, 1.0f - rmsSum / (float)sumIndividualRms);
+
+                // Level-weighted CI: cancellation is only meaningful when signal is present.
+                // Weight rises as sqrt(D / D_ref), clamped to 1 above D_ref = 0.1 (-20 dBFS).
+                // At the noise floor (~0.01) weight ≈ 0.32; at -20 dBFS weight = 1.0.
+                constexpr float D_REF = 0.1f;
+                const float levelWeight = std::sqrt(
+                    juce::jlimit(0.0f, 1.0f, (float)(sumIndividualRms / D_REF)));
+                m_cancellationIndex[s] = ci * levelWeight;
             }
         }
     }
