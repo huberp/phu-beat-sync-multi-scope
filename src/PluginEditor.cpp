@@ -138,6 +138,21 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
     };
     addAndMakeVisible(cancellationToggle);
 
+    amplitudeLabel.setText("Scale:", juce::dontSendNotification);
+    amplitudeLabel.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(amplitudeLabel);
+
+    amplitudeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    amplitudeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 40, 18);
+    amplitudeSlider.setRange(0.5, 4.0, 0.01);
+    amplitudeSlider.setValue(1.0, juce::dontSendNotification);
+    amplitudeSlider.setDoubleClickReturnValue(true, 1.0);
+    amplitudeSlider.onValueChange = [this]() {
+        scopeDisplay.setAmplitudeScale(static_cast<float>(amplitudeSlider.getValue()));
+        scopeDisplay.repaint();
+    };
+    addAndMakeVisible(amplitudeSlider);
+
     // Register as APVTS listener to enforce constraint on external parameter changes
     audioProcessor.getAPVTS().addParameterListener("display_hp_freq", this);
     audioProcessor.getAPVTS().addParameterListener("display_lp_freq", this);
@@ -255,6 +270,9 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     rmsToggle.setBounds(analysisContent.removeFromLeft(130));
     analysisContent.removeFromLeft(6);
     cancellationToggle.setBounds(analysisContent.removeFromLeft(130));
+    analysisContent.removeFromLeft(16);
+    amplitudeLabel.setBounds(analysisContent.removeFromLeft(38));
+    amplitudeSlider.setBounds(analysisContent.removeFromLeft(160));
 
     // Main display area
     area.reduce(10, 5);

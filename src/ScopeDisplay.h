@@ -58,6 +58,10 @@ class ScopeDisplay : public juce::Component {
      */
     void setCancellationOverlayEnabled(bool enabled) { m_showCancellation = enabled; }
 
+    /** Set the Y-axis amplitude scale factor [0.5, 4.0]. Double-click on the UI slider resets to 1.0. */
+    void setAmplitudeScale(float scale) { m_amplitudeScale = juce::jlimit(0.5f, 4.0f, scale); }
+    float getAmplitudeScale() const { return m_amplitudeScale; }
+
   private:
     // Local waveform data (copied from BeatSyncBuffer on UI thread)
     std::vector<float> m_localData;
@@ -111,8 +115,11 @@ class ScopeDisplay : public juce::Component {
     /** Draw the cancellation colour bar at the bottom of the display. */
     void drawCancellationOverlay(juce::Graphics& g, juce::Rectangle<float> area);
 
+    // Amplitude scale factor applied to Y-axis display [0.5, 4.0]
+    float m_amplitudeScale = 1.0f;
+
     // Map raw sample value [-1, +1] to Y coordinate
-    static float sampleToY(float sample, float top, float height);
+    float sampleToY(float sample, float top, float height) const;
 
     // Colour palette for remote instances
     static juce::Colour getRemoteColour(int index);

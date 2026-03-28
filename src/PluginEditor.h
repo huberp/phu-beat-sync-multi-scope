@@ -59,6 +59,8 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     juce::GroupComponent analysisGroup;
     juce::ToggleButton rmsToggle;          // Toggle RMS envelope lines
     juce::ToggleButton cancellationToggle; // Toggle inter-instance cancellation bar
+    juce::Slider       amplitudeSlider;    // Y-scale leveler [0.5, 4.0], double-click resets to 1.0
+    juce::Label        amplitudeLabel;
 
     // Display filter DSP (GUI thread only — never touched by audio thread)
     LinkwitzRiley::LinkwitzRileyFilter<float> m_displayHP;

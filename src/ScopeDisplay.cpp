@@ -402,9 +402,10 @@ void ScopeDisplay::drawPlayhead(juce::Graphics& g, juce::Rectangle<float> area) 
 // Helpers
 // ============================================================================
 
-float ScopeDisplay::sampleToY(float sample, float top, float height) {
-    // Map [-1, +1] to [bottom, top]: +1 at top, -1 at bottom
-    float normalized = (sample + 1.0f) * 0.5f; // [-1,+1] → [0,1]
+float ScopeDisplay::sampleToY(float sample, float top, float height) const {
+    // Apply visual Y-scale then map [-1, +1] to [bottom, top]: +1 at top, -1 at bottom
+    const float scaled = juce::jlimit(-1.0f, 1.0f, sample * m_amplitudeScale);
+    float normalized = (scaled + 1.0f) * 0.5f; // [-1,+1] → [0,1]
     normalized = juce::jlimit(0.0f, 1.0f, normalized);
     return top + (1.0f - normalized) * height;
 }
