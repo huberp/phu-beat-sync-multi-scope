@@ -88,6 +88,14 @@ void ScopeDisplay::paint(juce::Graphics& g) {
     // Grid lines
     drawGrid(g, bounds);
 
+    // Analysis overlays — computed and drawn before waveforms so traces sit on top
+    if (m_showRms || m_showCancellation)
+        computeMetrics();
+    if (m_showRms)
+        drawRmsOverlay(g, bounds);
+    if (m_showCancellation && !m_remoteAccumBuffers.empty())
+        drawCancellationOverlay(g, bounds);
+
     // Remote waveforms (drawn first, underneath local)
     if (m_showRemote && !m_remoteAccumBuffers.empty()) {
         int colourIdx = 0;
@@ -180,6 +188,158 @@ void ScopeDisplay::drawWaveform(juce::Graphics& g, juce::Rectangle<float> area,
 
     g.setColour(colour.withAlpha(alpha));
     g.strokePath(path, juce::PathStrokeType(1.5f));
+}
+
+// ============================================================================
+// Analysis Metrics (RMS + Inter-Instance Cancellation)
+// ============================================================================
+
+void ScopeDisplay::computeMetrics() {
+    const int numRmsSlots = juce::jlimit(1, MAX_METRIC_SLOTS,
+                                         (int)std::round(m_displayRangeBeats * 16.0));
+
+    for (int s = 0; s < MAX_METRIC_SLOTS; ++s) {
+        m_rmsLocal[s] = 0.0f;
+        m_rmsSum[s]   = 0.0f;
+    }
+    for (int s = 0; s < MAX_CANCEL_SLOTS; ++s)
+        m_cancellationIndex[s] = 0.0f;
+
+    const int  localBins  = (int)m_localData.size();
+    const int  numRemotes = (int)m_remoteAccumBuffers.size();
+    const bool doCancel   = m_showCancellation && !m_remoteAccumBuffers.empty();
+
+    // Cache remote bin pointers for fast inner-loop access
+    std::vector<const float*> remotePtrs;
+    std::vector<int>          remoteSizes;
+    remotePtrs.reserve(static_cast<size_t>(numRemotes));
+    remoteSizes.reserve(static_cast<size_t>(numRemotes));
+    for (const auto& kv : m_remoteAccumBuffers) {
+        remotePtrs.push_back(kv.second.bins.data());
+        remoteSizes.push_back((int)kv.second.bins.size());
+    }
+
+    // ---- RMS per 1/16-beat slot: RMS of (local + all remotes sum) ----
+    for (int s = 0; s < numRmsSlots; ++s) {
+        const int wStart = s       * REMOTE_ACCUM_BINS / numRmsSlots;
+        const int wEnd   = (s + 1) * REMOTE_ACCUM_BINS / numRmsSlots;
+        const int wCount = wEnd - wStart;
+        if (wCount <= 0) continue;
+
+        double sumSqLocal = 0.0;
+        double sumSqSum   = 0.0;
+
+        for (int b = wStart; b < wEnd; ++b) {
+            const int   lb = localBins > 0 ? b * localBins / REMOTE_ACCUM_BINS : 0;
+            const float lv = (localBins > 0 && lb < localBins)
+                                 ? m_localData[static_cast<size_t>(lb)] : 0.0f;
+            sumSqLocal += lv * lv;
+
+            float sumVal = lv;
+            for (int ri = 0; ri < numRemotes; ++ri) {
+                const float rv = (b < remoteSizes[ri]) ? remotePtrs[ri][b] : 0.0f;
+                sumVal += rv;
+            }
+            sumSqSum += sumVal * sumVal;
+        }
+
+        m_rmsLocal[s] = std::sqrt((float)(sumSqLocal / wCount));
+        m_rmsSum[s]   = std::sqrt((float)(sumSqSum   / wCount));
+    }
+
+    // ---- Cancellation: fine-grained windows (~4ms each at 4-beat display) ----
+    if (doCancel) {
+        std::vector<double> remSumSq(static_cast<size_t>(numRemotes), 0.0);
+
+        for (int s = 0; s < MAX_CANCEL_SLOTS; ++s) {
+            const int wStart = s       * REMOTE_ACCUM_BINS / MAX_CANCEL_SLOTS;
+            const int wEnd   = (s + 1) * REMOTE_ACCUM_BINS / MAX_CANCEL_SLOTS;
+            const int wCount = wEnd - wStart;
+            if (wCount <= 0) continue;
+
+            double sumSqLocal = 0.0;
+            double sumSqSum   = 0.0;
+            std::fill(remSumSq.begin(), remSumSq.end(), 0.0);
+
+            for (int b = wStart; b < wEnd; ++b) {
+                const int   lb = localBins > 0 ? b * localBins / REMOTE_ACCUM_BINS : 0;
+                const float lv = (localBins > 0 && lb < localBins)
+                                     ? m_localData[static_cast<size_t>(lb)] : 0.0f;
+                sumSqLocal += lv * lv;
+
+                float sumVal = lv;
+                for (int ri = 0; ri < numRemotes; ++ri) {
+                    const float rv = (b < remoteSizes[ri]) ? remotePtrs[ri][b] : 0.0f;
+                    remSumSq[static_cast<size_t>(ri)] += rv * rv;
+                    sumVal += rv;
+                }
+                sumSqSum += sumVal * sumVal;
+            }
+
+            double sumIndividualRms = std::sqrt(sumSqLocal / wCount);
+            for (int ri = 0; ri < numRemotes; ++ri)
+                sumIndividualRms += std::sqrt(remSumSq[static_cast<size_t>(ri)] / wCount);
+
+            // Noise floor at -40 dBFS: prevents false cancellation from 8-bit DC offset (~0.004)
+            if (sumIndividualRms > 0.01) {
+                const float rmsSum = std::sqrt((float)(sumSqSum / wCount));
+                m_cancellationIndex[s] = juce::jlimit(
+                    0.0f, 1.0f, 1.0f - rmsSum / (float)sumIndividualRms);
+            }
+        }
+    }
+}
+
+void ScopeDisplay::drawRmsOverlay(juce::Graphics& g, juce::Rectangle<float> area) {
+    const int   numSlots = juce::jlimit(1, MAX_METRIC_SLOTS,
+                                        (int)std::round(m_displayRangeBeats * 16.0));
+    const float slotW = area.getWidth() / static_cast<float>(numSlots);
+
+    // When remote display is off, show only local RMS so the line never reflects
+    // hidden data. When remote is on, show the combined sum RMS.
+    const bool useSum = m_showRemote && !m_remoteAccumBuffers.empty();
+
+    for (int s = 0; s < numSlots; ++s) {
+        const float rms = useSum ? m_rmsSum[s] : m_rmsLocal[s];
+        if (rms < 1e-4f) continue;
+
+        const float x0  = area.getX() + static_cast<float>(s)     * slotW;
+        const float w   = slotW;
+        const float lineY = sampleToY(rms, area.getY(), area.getHeight());
+
+        // Layered glow: outer halo → inner glow → bright core  (blue-white palette)
+        g.setColour(juce::Colour(0x1A44AAFF)); // outer halo, 5px spread
+        g.fillRect(x0, lineY - 2.5f, w, 5.0f);
+
+        g.setColour(juce::Colour(0x5566CCFF)); // inner glow, 3px
+        g.fillRect(x0, lineY - 1.5f, w, 3.0f);
+
+        g.setColour(juce::Colour(0xEEAAEEFF)); // bright core, 2px (ice-blue/white)
+        g.fillRect(x0, lineY - 0.5f, w, 2.0f);
+    }
+}
+
+void ScopeDisplay::drawCancellationOverlay(juce::Graphics& g, juce::Rectangle<float> area) {
+    const int   numSlots = MAX_CANCEL_SLOTS;  // fine-grained, constant 256 windows
+    const float slotW = area.getWidth() / static_cast<float>(numSlots);
+    constexpr float barH = 6.0f;
+    const float barY = area.getBottom() - barH;
+
+    for (int s = 0; s < numSlots; ++s) {
+        const float ci = m_cancellationIndex[s];
+
+        // Colour: green (0) → yellow (0.4) → red (1.0)
+        juce::Colour col;
+        if (ci < 0.4f)
+            col = juce::Colour(0xFF00BB55)
+                      .interpolatedWith(juce::Colour(0xFFFFCC00), ci / 0.4f);
+        else
+            col = juce::Colour(0xFFFFCC00)
+                      .interpolatedWith(juce::Colour(0xFFFF3300), (ci - 0.4f) / 0.6f);
+
+        g.setColour(col.withAlpha(0.85f));
+        g.fillRect(area.getX() + static_cast<float>(s) * slotW, barY, slotW, barH);
+    }
 }
 
 // ============================================================================

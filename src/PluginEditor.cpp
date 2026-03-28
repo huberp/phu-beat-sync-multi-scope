@@ -15,8 +15,8 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
       audioProcessor(p),
       hpFilterStrip("HP", p.getAPVTS(), "display_hp_enabled", "display_hp_freq"),
       lpFilterStrip("LP", p.getAPVTS(), "display_lp_enabled", "display_lp_freq") {
-    // Window size (taller to accommodate the filter controls row)
-    setSize(800, 560);
+    // Window size
+    setSize(800, 612);
 
     // --- Scope Display ---
     addAndMakeVisible(scopeDisplay);
@@ -117,6 +117,26 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
 
     addAndMakeVisible(hpFilterStrip);
     addAndMakeVisible(lpFilterStrip);
+
+    // --- Analysis Overlays Group ---
+    analysisGroup.setText("Analysis");
+    addAndMakeVisible(analysisGroup);
+
+    rmsToggle.setButtonText("RMS Envelope");
+    rmsToggle.setToggleState(false, juce::dontSendNotification);
+    rmsToggle.onClick = [this]() {
+        scopeDisplay.setRmsOverlayEnabled(rmsToggle.getToggleState());
+        scopeDisplay.repaint();
+    };
+    addAndMakeVisible(rmsToggle);
+
+    cancellationToggle.setButtonText("Cancellation");
+    cancellationToggle.setToggleState(false, juce::dontSendNotification);
+    cancellationToggle.onClick = [this]() {
+        scopeDisplay.setCancellationOverlayEnabled(cancellationToggle.getToggleState());
+        scopeDisplay.repaint();
+    };
+    addAndMakeVisible(cancellationToggle);
 
     // Register as APVTS listener to enforce constraint on external parameter changes
     audioProcessor.getAPVTS().addParameterListener("display_hp_freq", this);
@@ -224,6 +244,17 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
 
     hpFilterStrip.setBounds(hpArea);
     lpFilterStrip.setBounds(lpArea);
+
+    // Analysis overlays strip (third control row)
+    auto analysisStrip = area.removeFromTop(46);
+    analysisStrip.reduce(10, 3);
+    analysisGroup.setBounds(analysisStrip);
+    auto analysisContent = analysisStrip.reduced(10, 0);
+    analysisContent.removeFromTop(16);
+    analysisContent.removeFromBottom(4);
+    rmsToggle.setBounds(analysisContent.removeFromLeft(130));
+    analysisContent.removeFromLeft(6);
+    cancellationToggle.setBounds(analysisContent.removeFromLeft(130));
 
     // Main display area
     area.reduce(10, 5);

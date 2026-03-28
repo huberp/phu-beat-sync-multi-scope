@@ -55,6 +55,11 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     DisplayFilterStrip hpFilterStrip;
     DisplayFilterStrip lpFilterStrip;
 
+    // Analysis overlays
+    juce::GroupComponent analysisGroup;
+    juce::ToggleButton rmsToggle;          // Toggle RMS envelope lines
+    juce::ToggleButton cancellationToggle; // Toggle inter-instance cancellation bar
+
     // Display filter DSP (GUI thread only — never touched by audio thread)
     LinkwitzRiley::LinkwitzRileyFilter<float> m_displayHP;
     LinkwitzRiley::LinkwitzRileyFilter<float> m_displayLP;
