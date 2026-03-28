@@ -148,7 +148,8 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
 
     // Beat-driven broadcast: audio thread sets flag at quarter-beat boundaries
     std::atomic<bool> m_broadcastReady{false};
-    double m_lastBroadcastPpq = 0.0;  // audio-thread only
+    double m_lastBroadcastPpq = 0.0;   // audio-thread only
+    double m_lastWriteWindowStart = -1.0; // audio-thread only: last cycle start written
     static constexpr double BROADCAST_BEAT_INTERVAL = 0.25; // broadcast every 1/4 beat
 
     // Work buffer for headless broadcast (message-thread only)

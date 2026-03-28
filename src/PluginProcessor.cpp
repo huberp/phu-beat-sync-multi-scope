@@ -22,9 +22,12 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
     // Initialize sample broadcaster networking
     m_sampleBroadcaster.initialize();
 
-    // Start processor-owned broadcast timer (~10 Hz) so broadcasting continues
-    // even when the plugin editor is closed.
-    startTimerHz(10);
+    // Start processor-owned broadcast timer (30 Hz) so broadcasting continues
+    // even when the plugin editor is closed. 30 Hz matches the broadcaster's
+    // designed throttle interval (33 ms) and gives ~15 packets per beat at
+    // 120 BPM, keeping remote playhead positions fine-grained enough for the
+    // fresh-bins-only scatter-write to fill the display smoothly.
+    startTimerHz(30);
 }
 
 PhuBeatSyncMultiScopeAudioProcessor::~PhuBeatSyncMultiScopeAudioProcessor() {
@@ -145,6 +148,18 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
     if (bpm > 0.0 && displayRange > 0.0 && sampleRate > 0.0) {
         double blockPpq = m_syncGlobals.getPpqBlockStart();
         double ppqPerSample = bpm / (60.0 * sampleRate);
+
+        // Detect cycle boundary by block end PPQ. For short ranges (<= 1 beat),
+        // hard-clear on cycle transition to prevent previous-beat events from
+        // lingering into the next beat. For longer ranges, keep history and let
+        // per-sample writes naturally roll through the window.
+        const double blockEndPpq    = blockPpq + numSamples * ppqPerSample;
+        const double endWindowStart = std::floor(blockEndPpq / displayRange) * displayRange;
+        if (std::abs(endWindowStart - m_lastWriteWindowStart) > 1e-9) {
+            if (displayRange <= 1.0 + 1e-9)
+                m_inputSyncBuf.clear();
+            m_lastWriteWindowStart = endWindowStart;
+        }
 
         for (int i = 0; i < numSamples; ++i) {
             double ppq_i = blockPpq + i * ppqPerSample;

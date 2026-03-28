@@ -29,10 +29,13 @@ void ScopeDisplay::setRemoteData(
     }
 
     // Scatter-write each incoming packet's bins into the receiver-space accum buffer.
-    // Bins not covered by this packet keep their value from previous packets, so
-    // a sender with a smaller range than the receiver doesn't erase the rest of the
-    // display. A sender with a larger range simply overwrites the same receiver bins
-    // multiple times (last-write-wins — no doubling).
+    //
+    // Two-layer freshness guard:
+    //   1. Sender-side: PluginProcessor clears its BeatSyncBuffer on cycle transition,
+    //      so silent bins are already zero in the packet — primary fix.
+    //   2. Receiver-side (this code): on a new sender cycle, clear the affected
+    //      receiver bins, then write only 0..playheadBin (bins the sender has swept
+    //      past in the current cycle) — defence-in-depth against in-flight stale packets.
     for (const auto& remote : remoteData) {
         const int numBins = static_cast<int>(remote.samples.size());
         if (numBins == 0) continue;
@@ -43,11 +46,40 @@ void ScopeDisplay::setRemoteData(
         const double senderWindowStart =
             std::floor(remote.ppqPosition / senderRange) * senderRange;
 
+        // How far into the current sender cycle is the playhead? [0, numBins)
+        const double normPlayhead =
+            std::fmod(remote.ppqPosition, senderRange) / senderRange;
+        const int freshBins = static_cast<int>(normPlayhead * numBins);
+
         auto& accum = m_remoteAccumBuffers[remote.instanceID];
         if (static_cast<int>(accum.bins.size()) != REMOTE_ACCUM_BINS)
             accum.bins.assign(static_cast<size_t>(REMOTE_ACCUM_BINS), 0.0f);
 
-        for (int i = 0; i < numBins; ++i) {
+        // Cycle transition: sender has entered a new display window.
+        // For short windows (<= 1 beat), clear aggressively to avoid previous-beat
+        // bleed. For longer windows, preserve accumulated history.
+        if (std::abs(senderWindowStart - accum.lastWindowStart) > 1e-9) {
+            if (senderRange >= receiverRange) {
+                // Sender covers full receiver range. Only hard-clear for short windows.
+                if (receiverRange <= 1.0 + 1e-9)
+                    std::fill(accum.bins.begin(), accum.bins.end(), 0.0f);
+            } else {
+                // Sender covers a sub-range — clear only the affected receiver bins.
+                const double normStart =
+                    std::fmod(senderWindowStart, receiverRange) / receiverRange;
+                const int binStart = static_cast<int>(normStart * REMOTE_ACCUM_BINS);
+                const int binCount =
+                    static_cast<int>((senderRange / receiverRange) * REMOTE_ACCUM_BINS);
+                for (int b = 0; b < binCount; ++b)
+                    accum.bins[static_cast<size_t>(
+                        (binStart + b) % REMOTE_ACCUM_BINS)] = 0.0f;
+            }
+            accum.lastWindowStart = senderWindowStart;
+        }
+
+        // Write only the freshly-swept portion of the sender's buffer.
+        // Bins ahead of the playhead are stale from the previous cycle — skip them.
+        for (int i = 0; i <= freshBins && i < numBins; ++i) {
             const double absolutePpq =
                 senderWindowStart +
                 (static_cast<double>(i) / static_cast<double>(numBins)) * senderRange;
@@ -301,7 +333,7 @@ void ScopeDisplay::drawRmsOverlay(juce::Graphics& g, juce::Rectangle<float> area
 
     for (int s = 0; s < numSlots; ++s) {
         const float rms = useSum ? m_rmsSum[s] : m_rmsLocal[s];
-        if (rms < 1e-4f) continue;
+        if (rms < 1e-6f) continue; // skip only truly silent bins (~-120 dBFS)
 
         const float x0  = area.getX() + static_cast<float>(s)     * slotW;
         const float w   = slotW;

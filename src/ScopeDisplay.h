@@ -70,7 +70,8 @@ class ScopeDisplay : public juce::Component {
     // packets persist until overwritten — prevents blinking when senderRange < receiverRange
     // and prevents double-painting when senderRange > receiverRange.
     struct RemoteAccumEntry {
-        std::vector<float> bins; // size == REMOTE_ACCUM_BINS, receiver-normalised
+        std::vector<float> bins;          // size == REMOTE_ACCUM_BINS, receiver-normalised
+        double lastWindowStart = -1e18;   // sender's ppq window start from last packet
     };
     std::map<uint32_t, RemoteAccumEntry> m_remoteAccumBuffers;
     double m_lastAccumReceiverRange = -1.0; // invalidated when receiver range changes
