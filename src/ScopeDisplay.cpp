@@ -19,6 +19,60 @@ void ScopeDisplay::setLocalData(const float* data, int numBins) {
 void ScopeDisplay::setRemoteData(
     const std::vector<SampleBroadcaster::RemoteSampleData>& remoteData) {
     m_remoteData = remoteData;
+
+    const double receiverRange = m_displayRangeBeats > 0.0 ? m_displayRangeBeats : 1.0;
+
+    // Invalidate all accum buffers when the receiver's display range changes
+    if (receiverRange != m_lastAccumReceiverRange) {
+        m_remoteAccumBuffers.clear();
+        m_lastAccumReceiverRange = receiverRange;
+    }
+
+    // Scatter-write each incoming packet's bins into the receiver-space accum buffer.
+    // Bins not covered by this packet keep their value from previous packets, so
+    // a sender with a smaller range than the receiver doesn't erase the rest of the
+    // display. A sender with a larger range simply overwrites the same receiver bins
+    // multiple times (last-write-wins — no doubling).
+    for (const auto& remote : remoteData) {
+        const int numBins = static_cast<int>(remote.samples.size());
+        if (numBins == 0) continue;
+
+        const double senderRange = remote.displayRangeBeats > 0.0f
+                                       ? static_cast<double>(remote.displayRangeBeats)
+                                       : 1.0;
+        const double senderWindowStart =
+            std::floor(remote.ppqPosition / senderRange) * senderRange;
+
+        auto& accum = m_remoteAccumBuffers[remote.instanceID];
+        if (static_cast<int>(accum.bins.size()) != REMOTE_ACCUM_BINS)
+            accum.bins.assign(static_cast<size_t>(REMOTE_ACCUM_BINS), 0.0f);
+
+        for (int i = 0; i < numBins; ++i) {
+            const double absolutePpq =
+                senderWindowStart +
+                (static_cast<double>(i) / static_cast<double>(numBins)) * senderRange;
+
+            double normPos = std::fmod(absolutePpq, receiverRange) / receiverRange;
+            if (normPos < 0.0) normPos += 1.0;
+
+            const int bin = static_cast<int>(normPos * REMOTE_ACCUM_BINS);
+            if (bin >= 0 && bin < REMOTE_ACCUM_BINS)
+                accum.bins[static_cast<size_t>(bin)] = remote.samples[static_cast<size_t>(i)];
+        }
+    }
+
+    // Prune accum buffers for instances that have gone stale (disappeared from
+    // the received set). Only prune when remoteData is non-empty so toggling
+    // "Show Remote" off (which passes an empty vector) doesn't discard state.
+    if (!remoteData.empty()) {
+        auto it = m_remoteAccumBuffers.begin();
+        while (it != m_remoteAccumBuffers.end()) {
+            bool found = false;
+            for (const auto& r : remoteData)
+                if (r.instanceID == it->first) { found = true; break; }
+            it = found ? std::next(it) : m_remoteAccumBuffers.erase(it);
+        }
+    }
 }
 
 // ============================================================================
@@ -35,14 +89,14 @@ void ScopeDisplay::paint(juce::Graphics& g) {
     drawGrid(g, bounds);
 
     // Remote waveforms (drawn first, underneath local)
-    if (m_showRemote && !m_remoteData.empty()) {
-        for (int i = 0; i < static_cast<int>(m_remoteData.size()); ++i) {
-            const auto& remote = m_remoteData[static_cast<size_t>(i)];
-            if (!remote.samples.empty()) {
-                drawWaveform(g, bounds, remote.samples.data(),
-                             static_cast<int>(remote.samples.size()),
-                             getRemoteColour(i), 0.5f);
-            }
+    if (m_showRemote && !m_remoteAccumBuffers.empty()) {
+        int colourIdx = 0;
+        for (const auto& kv : m_remoteAccumBuffers) {
+            if (!kv.second.bins.empty())
+                drawWaveform(g, bounds, kv.second.bins.data(),
+                             static_cast<int>(kv.second.bins.size()),
+                             getRemoteColour(colourIdx), 0.5f);
+            ++colourIdx;
         }
     }
 

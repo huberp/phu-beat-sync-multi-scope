@@ -3,6 +3,7 @@
 #include "../lib/audio/BeatSyncBuffer.h"
 #include "../lib/network/SampleBroadcaster.h"
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <map>
 #include <vector>
 
 using phu::audio::BeatSyncBuffer;
@@ -51,8 +52,20 @@ class ScopeDisplay : public juce::Component {
     // Local waveform data (copied from BeatSyncBuffer on UI thread)
     std::vector<float> m_localData;
 
-    // Remote waveform data from other instances
+    // Remote waveform data from other instances (raw, kept for metadata only)
     std::vector<SampleBroadcaster::RemoteSampleData> m_remoteData;
+
+    // Per-instance accumulation buffers already projected into the receiver's coordinate
+    // space. Populated incrementally by setRemoteData() so bins written by previous
+    // packets persist until overwritten — prevents blinking when senderRange < receiverRange
+    // and prevents double-painting when senderRange > receiverRange.
+    struct RemoteAccumEntry {
+        std::vector<float> bins; // size == REMOTE_ACCUM_BINS, receiver-normalised
+    };
+    std::map<uint32_t, RemoteAccumEntry> m_remoteAccumBuffers;
+    double m_lastAccumReceiverRange = -1.0; // invalidated when receiver range changes
+
+    static constexpr int REMOTE_ACCUM_BINS = SampleBroadcaster::MAX_SAMPLE_BINS;
 
     // Display state
     bool m_showLocal = true;
