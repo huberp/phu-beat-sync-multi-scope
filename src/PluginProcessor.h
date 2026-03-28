@@ -18,8 +18,7 @@ using phu::events::GlobalsEventListener;
 using phu::network::SampleBroadcaster;
 
 class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
-                                            public GlobalsEventListener,
-                                            private juce::Timer {
+                                            public GlobalsEventListener {
   public:
     PhuBeatSyncMultiScopeAudioProcessor();
     ~PhuBeatSyncMultiScopeAudioProcessor() override;
@@ -75,6 +74,17 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     bool isBroadcastEnabled() const { return m_broadcastEnabled.load(); }
     void setBroadcastEnabled(bool enabled);
 
+    /**
+     * Check whether a beat-boundary has been crossed since the last call and
+     * clear the flag atomically. Called from the editor timer to decide when
+     * to broadcast the filtered display buffer. Returns true once per beat
+     * interval; subsequent calls return false until the audio thread sets the
+     * flag again.
+     */
+    bool checkAndClearBroadcastReady() {
+        return m_broadcastReady.exchange(false, std::memory_order_acq_rel);
+    }
+
     // Sample receiving (independent from broadcasting)
     bool isReceiveEnabled() const { return m_receiveEnabled.load(); }
     void setReceiveEnabled(bool enabled);
@@ -83,7 +93,6 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     static constexpr int NUM_SYNC_BINS = 4096;
 
   private:
-    void timerCallback() override;
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     // DAW synchronization globals
