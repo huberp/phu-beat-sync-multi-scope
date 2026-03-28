@@ -26,8 +26,8 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
     displayRangeLabel.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(displayRangeLabel);
 
-    displayRangeCombo.addItem("1/4 Beat", 1);
-    displayRangeCombo.addItem("1/2 Beat", 2);
+    //displayRangeCombo.addItem("1/4 Beat", 1);
+    //displayRangeCombo.addItem("1/2 Beat", 2);
     displayRangeCombo.addItem("1 Beat", 3);
     displayRangeCombo.addItem("2 Beats", 4);
     displayRangeCombo.addItem("4 Beats", 5);
@@ -40,7 +40,9 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
 
     // Update display range when combo changes
     displayRangeCombo.onChange = [this]() {
-        static const double ranges[] = {0.25, 0.5, 1.0, 2.0, 4.0, 8.0};
+        // Map combo box index to beat range, based on one beat ... so index 1 corresponds to 0,25 and therefore 1/4 note
+        //static const double ranges[] = {0.25, 0.5, 1.0, 2.0, 4.0, 8.0};
+        static const double ranges[] = {1.0, 2.0, 4.0, 8.0};
         int idx = displayRangeCombo.getSelectedItemIndex();
         if (idx >= 0 && idx < 6) {
             audioProcessor.setDisplayRangeBeats(ranges[idx]);
@@ -208,7 +210,7 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     broadcastToggle.setBounds(remoteContent.removeFromLeft(110));
 
     // Display Filters strip (second control row)
-    auto filtersStrip = area.removeFromTop(58);
+    auto filtersStrip = area.removeFromTop(70);
     filtersStrip.reduce(10, 3);
     filtersGroup.setBounds(filtersStrip);
     auto filtersContent = filtersStrip.reduced(10, 0);
@@ -294,21 +296,6 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
         // --- Pass filtered data to the scope display ---
         scopeDisplay.setLocalData(m_displayWorkBuf.data(), static_cast<int>(m_displayWorkBuf.size()));
 
-        // --- Broadcast filtered data when a beat boundary has been crossed ---
-        if (audioProcessor.isBroadcastEnabled() &&
-            audioProcessor.checkAndClearBroadcastReady()) {
-            const double ppq = audioProcessor.getSyncGlobals().getPpqEndOfBlock();
-            const double bpm = audioProcessor.getSyncGlobals().getBPM();
-            const float displayRange =
-                static_cast<float>(audioProcessor.getDisplayRangeBeats());
-
-            if (bpm > 0.0) {
-                audioProcessor.getSampleBroadcaster().broadcastSamples(
-                    m_displayWorkBuf.data(),
-                    static_cast<int>(m_displayWorkBuf.size()),
-                    ppq, bpm, displayRange);
-            }
-        }
     }
 
     // Update PPQ position for playhead

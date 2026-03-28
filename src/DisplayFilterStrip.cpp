@@ -91,6 +91,9 @@ DisplayFilterStrip::DisplayFilterStrip(const juce::String& toggleText,
     // --- Frequency knob ---
     m_freqKnob.setSliderStyle(juce::Slider::RotaryVerticalDrag);
     m_freqKnob.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    m_freqKnob.setColour(juce::Slider::rotarySliderFillColourId,  juce::Colour(0xFF4FC3F7));
+    m_freqKnob.setColour(juce::Slider::rotarySliderOutlineColourId, juce::Colour(0xFF334466));
+    m_freqKnob.setColour(juce::Slider::thumbColourId, juce::Colours::white);
     addAndMakeVisible(m_freqKnob);
     m_freqAttachment =
         std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
@@ -142,13 +145,14 @@ void DisplayFilterStrip::resized() {
     area.removeFromLeft(4);
 
     // Rotary knob (square, centred vertically)
-    const int knobSize = juce::jmin(area.getHeight(), 36);
+    const int knobSize = juce::jmin(area.getHeight(), 44);
     m_freqKnob.setBounds(area.removeFromLeft(knobSize)
                               .withSizeKeepingCentre(knobSize, knobSize));
     area.removeFromLeft(4);
 
-    // Frequency label fills remaining width
-    m_freqLabel.setBounds(area);
+    // Frequency label — fixed width so it doesn't dominate the strip
+    const int labelW = juce::jmin(area.getWidth(), 120);
+    m_freqLabel.setBounds(area.removeFromLeft(labelW));
 }
 
 // ============================================================================

@@ -18,7 +18,8 @@ using phu::events::GlobalsEventListener;
 using phu::network::SampleBroadcaster;
 
 class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
-                                            public GlobalsEventListener {
+                                            public GlobalsEventListener,
+                                            public juce::Timer {
   public:
     PhuBeatSyncMultiScopeAudioProcessor();
     ~PhuBeatSyncMultiScopeAudioProcessor() override;
@@ -85,6 +86,9 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
         return m_broadcastReady.exchange(false, std::memory_order_acq_rel);
     }
 
+    /** juce::Timer callback — sends broadcast on the message thread (~10 Hz). */
+    void timerCallback() override;
+
     // Sample receiving (independent from broadcasting)
     bool isReceiveEnabled() const { return m_receiveEnabled.load(); }
     void setReceiveEnabled(bool enabled);
@@ -146,6 +150,9 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     std::atomic<bool> m_broadcastReady{false};
     double m_lastBroadcastPpq = 0.0;  // audio-thread only
     static constexpr double BROADCAST_BEAT_INTERVAL = 0.25; // broadcast every 1/4 beat
+
+    // Work buffer for headless broadcast (message-thread only)
+    std::vector<float> m_broadcastWorkBuf;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhuBeatSyncMultiScopeAudioProcessor)
 };

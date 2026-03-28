@@ -21,9 +21,14 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
 
     // Initialize sample broadcaster networking
     m_sampleBroadcaster.initialize();
+
+    // Start processor-owned broadcast timer (~10 Hz) so broadcasting continues
+    // even when the plugin editor is closed.
+    startTimerHz(10);
 }
 
 PhuBeatSyncMultiScopeAudioProcessor::~PhuBeatSyncMultiScopeAudioProcessor() {
+    stopTimer(); // Stop before destroying members that the callback uses
     m_sampleBroadcaster.shutdown();
 }
 
@@ -169,6 +174,34 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
     }
 
     m_syncGlobals.finishRun(numSamples);
+}
+
+// ============================================================================
+// Processor Timer — headless broadcast
+// ============================================================================
+
+void PhuBeatSyncMultiScopeAudioProcessor::timerCallback() {
+    if (!m_broadcastEnabled.load(std::memory_order_relaxed))
+        return;
+    if (!checkAndClearBroadcastReady())
+        return;
+
+    const int numBins = m_inputSyncBuf.size();
+    if (numBins <= 0)
+        return;
+
+    m_broadcastWorkBuf.resize(static_cast<size_t>(numBins));
+    std::copy(m_inputSyncBuf.data(), m_inputSyncBuf.data() + numBins,
+              m_broadcastWorkBuf.begin());
+
+    const double ppq = m_syncGlobals.getPpqEndOfBlock();
+    const double bpm = m_syncGlobals.getBPM();
+    const float displayRange = static_cast<float>(m_displayRangeBeats.load());
+
+    if (bpm > 0.0) {
+        m_sampleBroadcaster.broadcastSamples(
+            m_broadcastWorkBuf.data(), numBins, ppq, bpm, displayRange);
+    }
 }
 
 // ============================================================================
