@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <cmath>
 
 #ifndef NDEBUG
 #include "../lib/debug/EditorLogger.h"
@@ -69,12 +70,35 @@ PhuBeatSyncMultiScopeAudioProcessor::createParameterLayout() {
 }
 
 // ============================================================================
+// BPM / Display-Range Helpers
+// ============================================================================
+
+double PhuBeatSyncMultiScopeAudioProcessor::getMaxDisplayBeatsForBpm(double bpm) {
+    if (bpm >= 80.0) return 8.0;
+    if (bpm >= 60.0) return 4.0;
+    if (bpm >= 40.0) return 2.0;
+    return 1.0;
+}
+
+int PhuBeatSyncMultiScopeAudioProcessor::computeInputFifoCapacity(double sampleRate) {
+    // Worst-case window: 8 beats at the 80-BPM threshold = 6 × sampleRate samples.
+    // Supports sample rates up to 192 kHz and display windows down to 40 BPM
+    // within the allowed range restrictions.
+    return static_cast<int>(std::ceil(6.0 * sampleRate));
+}
+
+// ============================================================================
 // Audio Processing
 // ============================================================================
 
 void PhuBeatSyncMultiScopeAudioProcessor::prepareToPlay(double sampleRate, int /*samplesPerBlock*/) {
     m_syncGlobals.updateSampleRate(sampleRate);
     m_inputSyncBuf.prepare(NUM_SYNC_BINS);
+
+    // Resize the FIFO to hold the largest possible display window at this sample rate.
+    // This prevents data loss at slow tempos and high sample rates (up to 192 kHz).
+    m_inputFifo.resize(computeInputFifoCapacity(sampleRate));
+
     m_inputFifo.reset();
 
 #ifndef NDEBUG

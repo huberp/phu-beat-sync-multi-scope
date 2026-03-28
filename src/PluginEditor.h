@@ -23,6 +23,13 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     /** APVTS listener — enforces HP freq < LP freq constraint. */
     void parameterChanged(const juce::String& parameterID, float newValue) override;
 
+    /**
+     * Greys out display-range combo-box items that exceed the maximum supported
+     * beat window for the current BPM, and auto-switches the selection down to the
+     * highest allowed range when necessary.  Called from timerCallback().
+     */
+    void updateDisplayRangeConstraints();
+
 #ifndef NDEBUG
     void addLogMessage(const juce::String& message);
 #endif
@@ -57,6 +64,9 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
 
     // Working buffer for display filter application (persistent to avoid per-tick allocation)
     std::vector<float> m_displayWorkBuf;
+
+    // Track last BPM-derived max display range to avoid redundant combo-box updates
+    double m_lastMaxDisplayBeats = 8.0;
 
     // Minimum gap between HP and LP frequencies (Hz)
     static constexpr float MIN_FREQ_GAP = 10.0f;

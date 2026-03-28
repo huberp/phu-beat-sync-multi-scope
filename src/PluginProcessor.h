@@ -92,6 +92,29 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     // Number of bins for BeatSyncBuffer
     static constexpr int NUM_SYNC_BINS = 4096;
 
+    /**
+     * Returns the maximum allowed display range (in beats) for a given BPM.
+     *
+     * At very slow tempos a wide beat window spans many seconds, making the display
+     * impractical and causing the AudioSampleFifo to overflow before a full window
+     * can be assembled.  The thresholds below were chosen to keep the longest
+     * displayable window within ≈ 6 s across the supported sample-rate range:
+     *
+     *   BPM ≥ 80  → up to 8 beats  (8 beats @ 80 BPM = 6 s)
+     *   BPM ≥ 60  → up to 4 beats  (4 beats @ 60 BPM = 4 s)
+     *   BPM ≥ 40  → up to 2 beats  (2 beats @ 40 BPM = 3 s)
+     *   BPM <  40 → up to 1 beat
+     */
+    static double getMaxDisplayBeatsForBpm(double bpm);
+
+    /**
+     * Returns the required AudioSampleFifo capacity (samples per channel) for
+     * a given sample rate.  Sized for 8 beats at the 80 BPM threshold, which is
+     * the worst-case window within the supported tempo range:
+     *   capacity = ceil(8 × (60/80) × sampleRate) = ceil(6 × sampleRate)
+     */
+    static int computeInputFifoCapacity(double sampleRate);
+
   private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
