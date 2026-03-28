@@ -16,6 +16,8 @@ target_sources(phu-beat-sync-multi-scope PRIVATE
     PluginEditor.h
     ScopeDisplay.cpp
     ScopeDisplay.h
+    DisplayFilterStrip.cpp
+    DisplayFilterStrip.h
 
     # Debug components (moved to lib/debug/)
     ../lib/debug/EditorLogger.cpp

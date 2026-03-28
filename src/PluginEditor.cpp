@@ -11,9 +11,12 @@
 
 PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEditor(
     PhuBeatSyncMultiScopeAudioProcessor& p)
-    : AudioProcessorEditor(&p), audioProcessor(p) {
-    // Window size
-    setSize(800, 500);
+    : AudioProcessorEditor(&p),
+      audioProcessor(p),
+      hpFilterStrip("HP", p.getAPVTS(), "display_hp_enabled", "display_hp_freq"),
+      lpFilterStrip("LP", p.getAPVTS(), "display_lp_enabled", "display_lp_freq") {
+    // Window size (taller to accommodate the filter controls row)
+    setSize(800, 560);
 
     // --- Scope Display ---
     addAndMakeVisible(scopeDisplay);
@@ -76,6 +79,47 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
     };
     addAndMakeVisible(broadcastToggle);
 
+    // --- Display Filters Group ---
+    filtersGroup.setText("Display Filters");
+    addAndMakeVisible(filtersGroup);
+
+    // Enforce HP < LP constraint when HP freq changes
+    hpFilterStrip.onFreqChanged = [this](float /*newFreq*/) {
+        juce::Component::SafePointer<PhuBeatSyncMultiScopeAudioProcessorEditor> safeThis(this);
+        juce::MessageManager::callAsync([safeThis]() {
+            if (safeThis == nullptr) return;
+            auto& apvts = safeThis->audioProcessor.getAPVTS();
+            const float hpFreq = apvts.getRawParameterValue("display_hp_freq")->load();
+            const float lpFreq = apvts.getRawParameterValue("display_lp_freq")->load();
+            if (hpFreq > lpFreq - MIN_FREQ_GAP) {
+                if (auto* param = apvts.getParameter("display_hp_freq"))
+                    param->setValueNotifyingHost(param->convertTo0to1(lpFreq - MIN_FREQ_GAP));
+            }
+        });
+    };
+
+    // Enforce HP < LP constraint when LP freq changes
+    lpFilterStrip.onFreqChanged = [this](float /*newFreq*/) {
+        juce::Component::SafePointer<PhuBeatSyncMultiScopeAudioProcessorEditor> safeThis(this);
+        juce::MessageManager::callAsync([safeThis]() {
+            if (safeThis == nullptr) return;
+            auto& apvts = safeThis->audioProcessor.getAPVTS();
+            const float hpFreq = apvts.getRawParameterValue("display_hp_freq")->load();
+            const float lpFreq = apvts.getRawParameterValue("display_lp_freq")->load();
+            if (lpFreq < hpFreq + MIN_FREQ_GAP) {
+                if (auto* param = apvts.getParameter("display_lp_freq"))
+                    param->setValueNotifyingHost(param->convertTo0to1(hpFreq + MIN_FREQ_GAP));
+            }
+        });
+    };
+
+    addAndMakeVisible(hpFilterStrip);
+    addAndMakeVisible(lpFilterStrip);
+
+    // Register as APVTS listener to enforce constraint on external parameter changes
+    audioProcessor.getAPVTS().addParameterListener("display_hp_freq", this);
+    audioProcessor.getAPVTS().addParameterListener("display_lp_freq", this);
+
 #ifndef NDEBUG
     // --- Debug Log ---
     logLabel.setText("Debug Log:", juce::dontSendNotification);
@@ -109,6 +153,9 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
 
 PhuBeatSyncMultiScopeAudioProcessorEditor::~PhuBeatSyncMultiScopeAudioProcessorEditor() {
     stopTimer();
+
+    audioProcessor.getAPVTS().removeParameterListener("display_hp_freq", this);
+    audioProcessor.getAPVTS().removeParameterListener("display_lp_freq", this);
 
 #ifndef NDEBUG
     if (auto* logger = audioProcessor.getEditorLogger())
@@ -160,6 +207,22 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     remoteContent.removeFromLeft(6);
     broadcastToggle.setBounds(remoteContent.removeFromLeft(110));
 
+    // Display Filters strip (second control row)
+    auto filtersStrip = area.removeFromTop(58);
+    filtersStrip.reduce(10, 3);
+    filtersGroup.setBounds(filtersStrip);
+    auto filtersContent = filtersStrip.reduced(10, 0);
+    filtersContent.removeFromTop(16); // Space for group title
+    filtersContent.removeFromBottom(4);
+
+    // Two sub-strips side by side
+    auto hpArea = filtersContent.removeFromLeft(filtersContent.getWidth() / 2 - 4);
+    filtersContent.removeFromLeft(8); // Gap between strips
+    auto lpArea = filtersContent;
+
+    hpFilterStrip.setBounds(hpArea);
+    lpFilterStrip.setBounds(lpArea);
+
     // Main display area
     area.reduce(10, 5);
 
@@ -180,10 +243,72 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
 // ============================================================================
 
 void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
-    // Update scope with local beat-sync buffer data
     auto& syncBuf = audioProcessor.getInputSyncBuffer();
     if (syncBuf.size() > 0) {
-        scopeDisplay.setLocalData(syncBuf.data(), syncBuf.size());
+        // --- Update filter coefficients if sample rate or frequency changed ---
+        const double sampleRate = audioProcessor.getSampleRate();
+        const float hpFreq = audioProcessor.getAPVTS()
+                                 .getRawParameterValue("display_hp_freq")->load();
+        const float lpFreq = audioProcessor.getAPVTS()
+                                 .getRawParameterValue("display_lp_freq")->load();
+
+        if (sampleRate > 0.0) {
+            const bool srChanged = (sampleRate != m_lastSampleRate);
+            if (srChanged || hpFreq != m_lastHpFreq) {
+                m_displayHP.setParams(LinkwitzRiley::FilterType::HighPass,
+                                      LinkwitzRiley::Slope::DB48,
+                                      hpFreq, static_cast<float>(sampleRate));
+                m_displayHP.reset();
+                m_lastHpFreq = hpFreq;
+            }
+            if (srChanged || lpFreq != m_lastLpFreq) {
+                m_displayLP.setParams(LinkwitzRiley::FilterType::LowPass,
+                                      LinkwitzRiley::Slope::DB48,
+                                      lpFreq, static_cast<float>(sampleRate));
+                m_displayLP.reset();
+                m_lastLpFreq = lpFreq;
+            }
+            m_lastSampleRate = sampleRate;
+        }
+
+        // --- Copy sync buffer into a persistent working vector and apply display filters ---
+        const int numBins = static_cast<int>(syncBuf.size());
+        if (static_cast<int>(m_displayWorkBuf.size()) != numBins)
+            m_displayWorkBuf.resize(static_cast<size_t>(numBins));
+        std::copy(syncBuf.data(), syncBuf.data() + numBins, m_displayWorkBuf.begin());
+
+        const bool hpEnabled = audioProcessor.getAPVTS()
+                                   .getRawParameterValue("display_hp_enabled")->load() > 0.5f;
+        const bool lpEnabled = audioProcessor.getAPVTS()
+                                   .getRawParameterValue("display_lp_enabled")->load() > 0.5f;
+
+        if (hpEnabled) {
+            for (auto& s : m_displayWorkBuf)
+                s = m_displayHP.processSample(s);
+        }
+        if (lpEnabled) {
+            for (auto& s : m_displayWorkBuf)
+                s = m_displayLP.processSample(s);
+        }
+
+        // --- Pass filtered data to the scope display ---
+        scopeDisplay.setLocalData(m_displayWorkBuf.data(), static_cast<int>(m_displayWorkBuf.size()));
+
+        // --- Broadcast filtered data when a beat boundary has been crossed ---
+        if (audioProcessor.isBroadcastEnabled() &&
+            audioProcessor.checkAndClearBroadcastReady()) {
+            const double ppq = audioProcessor.getSyncGlobals().getPpqEndOfBlock();
+            const double bpm = audioProcessor.getSyncGlobals().getBPM();
+            const float displayRange =
+                static_cast<float>(audioProcessor.getDisplayRangeBeats());
+
+            if (bpm > 0.0) {
+                audioProcessor.getSampleBroadcaster().broadcastSamples(
+                    m_displayWorkBuf.data(),
+                    static_cast<int>(m_displayWorkBuf.size()),
+                    ppq, bpm, displayRange);
+            }
+        }
     }
 
     // Update PPQ position for playhead
@@ -200,6 +325,41 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
 
     // Repaint scope
     scopeDisplay.repaint();
+}
+
+// ============================================================================
+// APVTS Listener — HP/LP frequency constraint enforcement
+// ============================================================================
+
+void PhuBeatSyncMultiScopeAudioProcessorEditor::parameterChanged(
+    const juce::String& parameterID, float /*newValue*/) {
+    if (parameterID != "display_hp_freq" && parameterID != "display_lp_freq")
+        return;
+
+    const bool isHP = (parameterID == "display_hp_freq");
+
+    // Defer to the message thread to safely access APVTS parameters.
+    // Use SafePointer so the callback is a no-op if the editor is deleted first.
+    juce::Component::SafePointer<PhuBeatSyncMultiScopeAudioProcessorEditor> safeThis(this);
+    juce::MessageManager::callAsync([safeThis, isHP]() {
+        if (safeThis == nullptr) return;
+
+        auto& apvts = safeThis->audioProcessor.getAPVTS();
+        const float hpFreq = apvts.getRawParameterValue("display_hp_freq")->load();
+        const float lpFreq = apvts.getRawParameterValue("display_lp_freq")->load();
+
+        if (hpFreq > lpFreq - MIN_FREQ_GAP) {
+            if (isHP) {
+                // HP moved up past LP − gap → clamp HP
+                if (auto* param = apvts.getParameter("display_hp_freq"))
+                    param->setValueNotifyingHost(param->convertTo0to1(lpFreq - MIN_FREQ_GAP));
+            } else {
+                // LP moved down past HP + gap → clamp LP
+                if (auto* param = apvts.getParameter("display_lp_freq"))
+                    param->setValueNotifyingHost(param->convertTo0to1(hpFreq + MIN_FREQ_GAP));
+            }
+        }
+    });
 }
 
 // ============================================================================

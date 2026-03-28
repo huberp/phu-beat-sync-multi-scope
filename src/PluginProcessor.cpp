@@ -20,13 +20,9 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
 
     // Initialize sample broadcaster networking
     m_sampleBroadcaster.initialize();
-
-    // Start timer for broadcast duties (~30 Hz for responsive beat-driven sending)
-    startTimerHz(30);
 }
 
 PhuBeatSyncMultiScopeAudioProcessor::~PhuBeatSyncMultiScopeAudioProcessor() {
-    stopTimer();
     m_sampleBroadcaster.shutdown();
 }
 
@@ -43,6 +39,31 @@ PhuBeatSyncMultiScopeAudioProcessor::createParameterLayout() {
         "display_range", "Display Range",
         juce::StringArray{"1/4 Beat", "1/2 Beat", "1 Beat", "2 Beats", "4 Beats", "8 Beats"},
         4)); // Default: 4 beats
+
+    // --- Display filter parameters ---
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "display_hp_enabled", "HP Filter", false));
+
+    {
+        // HP upper bound is 18 kHz (below the LP ceiling of 20 kHz) to ensure at
+        // least one valid LP position always exists above any HP setting.
+        auto hpRange = juce::NormalisableRange<float>(20.0f, 18000.0f, 0.0f, 0.25f);
+        hpRange.setSkewForCentre(600.0f);
+        params.push_back(std::make_unique<juce::AudioParameterFloat>(
+            "display_hp_freq", "HP Freq", hpRange, 80.0f));
+    }
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "display_lp_enabled", "LP Filter", false));
+
+    {
+        // LP range extends to 20 kHz; HP range only goes to 18 kHz, so there is
+        // always room to place the LP above the maximum HP frequency.
+        auto lpRange = juce::NormalisableRange<float>(20.0f, 20000.0f, 0.0f, 0.25f);
+        lpRange.setSkewForCentre(1000.0f);
+        params.push_back(std::make_unique<juce::AudioParameterFloat>(
+            "display_lp_freq", "LP Freq", lpRange, 8000.0f));
+    }
 
     return {params.begin(), params.end()};
 }
@@ -124,26 +145,6 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
     }
 
     m_syncGlobals.finishRun(numSamples);
-}
-
-// ============================================================================
-// Timer Callback (broadcast duties)
-// ============================================================================
-
-void PhuBeatSyncMultiScopeAudioProcessor::timerCallback() {
-    // Broadcast beat-synced waveform data when a quarter-beat boundary was crossed
-    if (m_broadcastEnabled.load() && m_broadcastReady.exchange(false)) {
-        double ppq = m_syncGlobals.getPpqEndOfBlock();
-        double bpm = m_syncGlobals.getBPM();
-        float displayRange = static_cast<float>(m_displayRangeBeats.load());
-
-        if (bpm > 0.0) {
-            m_sampleBroadcaster.broadcastSamples(
-                m_inputSyncBuf.data(),
-                m_inputSyncBuf.size(),
-                ppq, bpm, displayRange);
-        }
-    }
 }
 
 // ============================================================================
