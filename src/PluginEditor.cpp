@@ -315,6 +315,9 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
     scopeDisplay.setCurrentPpq(audioProcessor.getSyncGlobals().getPpqEndOfBlock());
     scopeDisplay.setDisplayRangeBeats(audioProcessor.getDisplayRangeBeats());
 
+    // Enforce BPM-aware display range constraints (grey out/auto-switch)
+    updateDisplayRangeConstraints();
+
     // Get remote data if enabled (network receive on UI thread, per requirement)
     if (remoteDisplayToggle.getToggleState()) {
         auto remoteSamples = audioProcessor.getSampleBroadcaster().getReceivedSamples();
@@ -325,6 +328,44 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
 
     // Repaint scope
     scopeDisplay.repaint();
+}
+
+// ============================================================================
+// BPM-aware display range constraints
+// ============================================================================
+
+void PhuBeatSyncMultiScopeAudioProcessorEditor::updateDisplayRangeConstraints() {
+    // Display-range choices match the combo-box items (item IDs are 1-based)
+    static constexpr double kRanges[] = {0.25, 0.5, 1.0, 2.0, 4.0, 8.0};
+    static constexpr int kNumRanges = 6;
+
+    const double bpm = audioProcessor.getSyncGlobals().getBPM();
+    const double maxBeats = (bpm > 0.0)
+                                ? PhuBeatSyncMultiScopeAudioProcessor::getMaxDisplayBeatsForBpm(bpm)
+                                : 8.0;
+
+    // Skip update if the BPM category hasn't changed.
+    // getMaxDisplayBeatsForBpm() always returns an exact integer, so cast to int
+    // to avoid a -Wfloat-equal warning on the comparison.
+    if (static_cast<int>(maxBeats) == static_cast<int>(m_lastMaxDisplayBeats))
+        return;
+    m_lastMaxDisplayBeats = maxBeats;
+
+    // Enable/disable combo-box items based on the current BPM threshold
+    for (int i = 0; i < kNumRanges; ++i)
+        displayRangeCombo.setItemEnabled(i + 1, kRanges[i] <= maxBeats);
+
+    // If the currently selected range is now disabled, auto-switch to the
+    // highest range that is still allowed.
+    const int currentIdx = displayRangeCombo.getSelectedItemIndex();
+    if (currentIdx >= 0 && currentIdx < kNumRanges && kRanges[currentIdx] > maxBeats) {
+        for (int i = kNumRanges - 1; i >= 0; --i) {
+            if (kRanges[i] <= maxBeats) {
+                displayRangeCombo.setSelectedItemIndex(i, juce::sendNotificationSync);
+                break;
+            }
+        }
+    }
 }
 
 // ============================================================================

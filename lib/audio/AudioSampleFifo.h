@@ -1,7 +1,9 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <cstring>
+#include <vector>
 #include <juce_core/juce_core.h>
 
 namespace phu {
@@ -11,27 +13,49 @@ namespace audio {
  * Lock-free FIFO for transferring audio samples from the audio thread to the UI thread.
  *
  * Uses juce::AbstractFifo for lock-free single-writer / single-reader indexing
- * over a statically-allocated ring buffer. One instance per measurement point:
+ * over a heap-allocated ring buffer. One instance per measurement point:
  *   - AudioSampleFifo<2> for stereo input
  *   - AudioSampleFifo<2> for stereo output sum
  *
  * The audio thread calls push() to write samples.
  * The UI thread calls pull() to read the most recent N samples.
  *
+ * The capacity can be adjusted before use via resize(). The default capacity is
+ * kDefaultFifoSize, but call resize() in prepareToPlay() so the FIFO is large
+ * enough to hold the full display window at the current sample rate and minimum
+ * supported BPM.  See PluginProcessor::computeInputFifoCapacity().
+ *
  * Template parameter NumChannels: number of interleaved channels (typically 2 for stereo).
  */
 template <int NumChannels>
 class AudioSampleFifo {
   public:
-    /** Ring buffer capacity per channel. Must be power-of-two for efficient wrapping.
-     *  32768 samples = ~0.7s at 48kHz, 2x the max FFT size of 16384. */
-    static constexpr int kFifoSize = 32768;
+    /** Default ring buffer capacity per channel (covers ~0.7 s at 48 kHz). */
+    static constexpr int kDefaultFifoSize = 32768;
 
-    AudioSampleFifo() : fifo(kFifoSize) {
-        // Zero-initialize all channel buffers
+    AudioSampleFifo() : fifo(kDefaultFifoSize) {
+        // Heap-allocate and zero-initialize per-channel buffers
         for (auto& ch : buffer)
-            std::memset(ch.data(), 0, sizeof(float) * kFifoSize);
+            ch.assign(kDefaultFifoSize, 0.0f);
     }
+
+    /**
+     * Resize the ring buffer capacity. Must NOT be called concurrently with push/pull.
+     * Call from prepareToPlay() (audio thread, before processing starts) or from the
+     * constructor. Resets the FIFO (discards any pending data).
+     *
+     * @param newCapacity  Desired capacity in samples per channel (> 0).
+     */
+    void resize(int newCapacity) {
+        jassert(newCapacity > 0);
+        for (auto& ch : buffer)
+            ch.assign(static_cast<size_t>(newCapacity), 0.0f);
+        fifo.setTotalSize(newCapacity);
+        fifo.reset();
+    }
+
+    /** Returns the current ring buffer capacity (samples per channel). */
+    int getCapacity() const { return fifo.getTotalSize(); }
 
     /**
      * Push samples from the audio thread into the FIFO.
@@ -130,7 +154,7 @@ class AudioSampleFifo {
 
   private:
     juce::AbstractFifo fifo;
-    std::array<std::array<float, kFifoSize>, NumChannels> buffer;
+    std::array<std::vector<float>, NumChannels> buffer;
 };
 
 } // namespace audio
