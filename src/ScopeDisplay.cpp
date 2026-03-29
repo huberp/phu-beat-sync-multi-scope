@@ -313,9 +313,8 @@ void ScopeDisplay::computeMetrics() {
     }
 
     // ---- RMS per 1/16-beat slot: RMS of (local + all remotes sum) ----
-    // Remote accum is at REMOTE_ACCUM_BINS (2048), local is at NUM_SYNC_BINS (4096).
-    // Every other local bin is sampled — no peak-picking asymmetry since the wire
-    // encoding is now lossless float.
+    // Both remote accum and local are at REMOTE_ACCUM_BINS == NUM_SYNC_BINS (4096) —
+    // no index remap needed; lb == b always.
     for (int s = 0; s < numRmsSlots; ++s) {
         const int wStart = s       * REMOTE_ACCUM_BINS / numRmsSlots;
         const int wEnd   = (s + 1) * REMOTE_ACCUM_BINS / numRmsSlots;

@@ -73,16 +73,16 @@ bool SampleBroadcaster::broadcastSamples(const float* sampleData, int numBins,
     packet.bpm = bpm;
     packet.displayRangeBeats = displayRangeBeats;
 
-    // Downsample to MAX_SAMPLE_BINS using stride sampling to preserve the bin-to-position
+    // Downsample to MAX_WIRE_BINS using stride sampling to preserve the bin-to-position
     // coordinate mapping. A flat first-N copy would transmit only the first half of the
-    // sender's range (BeatSyncBuffer has 4096 bins, wire cap is 2048). The receiver
-    // reconstructs PPQ as: absolutePpq = senderWindowStart + (j / numBins) * senderRange.
+    // sender's range (BeatSyncBuffer has SYNC_BINS bins, wire cap is MAX_WIRE_BINS). The
+    // receiver reconstructs PPQ as: absolutePpq = senderWindowStart + (j / numBins) * senderRange.
     // With stride = numBins / outputBins, output bin j comes from input bin j * stride,
     // whose normalized position j * stride / numBins = j / outputBins — the same fraction
     // the receiver will compute — so PPQ reconstruction is exact.
-    int outputBins = (std::min)(numBins, MAX_SAMPLE_BINS);
+    int outputBins = (std::min)(numBins, MAX_WIRE_BINS);
     packet.numBins = static_cast<uint16_t>(outputBins);
-    if (numBins <= MAX_SAMPLE_BINS) {
+    if (numBins <= MAX_WIRE_BINS) {
         std::memcpy(packet.samples, sampleData, sizeof(float) * static_cast<size_t>(outputBins));
     } else {
         const int stride = numBins / outputBins;
@@ -167,7 +167,7 @@ void SampleBroadcaster::receiverThreadRun() {
         }
 
         // Validate bin count and that we received enough bytes for the declared bins
-        if (packet.numBins == 0 || packet.numBins > MAX_SAMPLE_BINS) {
+        if (packet.numBins == 0 || packet.numBins > MAX_WIRE_BINS) {
             continue;
         }
         const int expectedSize = kSamplePacketHeaderSize + static_cast<int>(sizeof(float)) * packet.numBins;

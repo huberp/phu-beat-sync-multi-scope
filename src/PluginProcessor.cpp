@@ -1,6 +1,13 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "../lib/network/SampleBroadcaster.h"
 #include <cmath>
+
+// Compile-time guard: BeatSyncBuffer resolution must match SampleBroadcaster::SYNC_BINS
+// so that the receiver's accum buffer is 1:1 with the sender's source buffer.
+static_assert(PhuBeatSyncMultiScopeAudioProcessor::NUM_SYNC_BINS ==
+                  phu::network::SampleBroadcaster::SYNC_BINS,
+              "NUM_SYNC_BINS must equal SampleBroadcaster::SYNC_BINS");
 
 #ifndef NDEBUG
 #include "../lib/debug/EditorLogger.h"

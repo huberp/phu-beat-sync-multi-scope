@@ -86,7 +86,7 @@ class ScopeDisplay : public juce::Component {
     std::map<uint32_t, RemoteAccumEntry> m_remoteAccumBuffers;
     double m_lastAccumReceiverRange = -1.0; // invalidated when receiver range changes
 
-    static constexpr int REMOTE_ACCUM_BINS = SampleBroadcaster::MAX_SAMPLE_BINS;
+    static constexpr int REMOTE_ACCUM_BINS = SampleBroadcaster::SYNC_BINS;
 
     // Display state
     bool m_showLocal = true;

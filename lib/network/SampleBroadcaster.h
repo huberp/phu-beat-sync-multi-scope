@@ -40,8 +40,18 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     /** UDP port for sample multicasts (separate from spectrum port 49421). */
     static constexpr int MULTICAST_PORT = 49423;
 
-    /** Maximum sample bins to transmit per packet. */
-    static constexpr int MAX_SAMPLE_BINS = 2048;
+    /**
+     * Receiver-side accum buffer resolution — matches sender's BeatSyncBuffer exactly.
+     * Must equal PluginProcessor::NUM_SYNC_BINS (4096).
+     */
+    static constexpr int SYNC_BINS = 4096;
+
+    /**
+     * Maximum bins transmitted per packet, bounded by safe UDP payload size (~8 KB).
+     * Sender downsamples from SYNC_BINS to MAX_WIRE_BINS when sending.
+     * Computed as (8192 - 44 byte header) / 4 bytes per float.
+     */
+    static constexpr int MAX_WIRE_BINS = 2036;
 
     /** Protocol version — bumped when wire format changes. */
     static constexpr uint32_t PROTOCOL_VERSION = 2;
@@ -59,8 +69,8 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
         double ppqPosition;                // PPQ position reference for beat sync
         double bpm;                        // Current BPM for receiver display sync
         float displayRangeBeats;           // Musical range this buffer covers
-        uint16_t numBins;                  // Number of sample bins (up to MAX_SAMPLE_BINS)
-        float    samples[MAX_SAMPLE_BINS]; // Float waveform data [-1, +1]
+        uint16_t numBins;                  // Number of sample bins (up to MAX_WIRE_BINS)
+        float    samples[MAX_WIRE_BINS];   // Float waveform data [-1, +1]
     };
     #pragma pack(pop)
 
