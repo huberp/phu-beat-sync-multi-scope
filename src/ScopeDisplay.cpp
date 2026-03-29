@@ -267,8 +267,9 @@ void ScopeDisplay::drawWaveform(juce::Graphics& g, juce::Rectangle<float> area,
             const float yMax = sampleToY(maxV, area.getY(), area.getHeight()); // larger amp = smaller y
             const float yMin = sampleToY(minV, area.getY(), area.getHeight());
 
-            if (!started) { path.startNewSubPath(x, yMax); started = true; }
-            else            path.lineTo(x, yMax);
+            // Start a new subpath for each vertical min/max stroke so columns
+            // are not connected across X by diagonal segments.
+            path.startNewSubPath(x, yMax);
             path.lineTo(x, yMin);
         }
     }
