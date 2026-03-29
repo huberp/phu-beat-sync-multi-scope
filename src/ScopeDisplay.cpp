@@ -203,19 +203,41 @@ void ScopeDisplay::drawWaveform(juce::Graphics& g, juce::Rectangle<float> area,
                                 juce::Colour colour, float alpha) {
     if (numBins < 2) return;
 
+    // Decimate to screen pixel width: draw at most one point per pixel column.
+    // When multiple bins map to the same pixel, take the min/max pair and draw
+    // a vertical line segment — this preserves sharp transients at all zoom levels
+    // without aliasing, while reducing path operations from O(numBins) to O(width).
+    const int screenW = juce::jmax(2, static_cast<int>(area.getWidth()));
     juce::Path path;
     bool started = false;
 
-    for (int i = 0; i < numBins; ++i) {
-        float x = area.getX() + (static_cast<float>(i) / static_cast<float>(numBins - 1)) *
-                                     area.getWidth();
-        float y = sampleToY(data[i], area.getY(), area.getHeight());
+    for (int px = 0; px < screenW; ++px) {
+        const float x = area.getX() + static_cast<float>(px);
 
-        if (!started) {
-            path.startNewSubPath(x, y);
-            started = true;
+        // Map pixel column to bin range [binStart, binEnd)
+        const int binStart = px       * numBins / screenW;
+        const int binEnd   = (px + 1) * numBins / screenW;
+
+        if (binStart >= numBins) break;
+
+        if (binEnd <= binStart + 1) {
+            // One bin per pixel: simple line-to
+            const float y = sampleToY(data[binStart], area.getY(), area.getHeight());
+            if (!started) { path.startNewSubPath(x, y); started = true; }
+            else            path.lineTo(x, y);
         } else {
-            path.lineTo(x, y);
+            // Multiple bins per pixel: find min/max for vertical stroke
+            float minV = data[binStart], maxV = data[binStart];
+            for (int b = binStart + 1; b < binEnd && b < numBins; ++b) {
+                if (data[b] < minV) minV = data[b];
+                if (data[b] > maxV) maxV = data[b];
+            }
+            const float yMax = sampleToY(maxV, area.getY(), area.getHeight()); // larger amp = smaller y
+            const float yMin = sampleToY(minV, area.getY(), area.getHeight());
+
+            if (!started) { path.startNewSubPath(x, yMax); started = true; }
+            else            path.lineTo(x, yMax);
+            path.lineTo(x, yMin);
         }
     }
 
