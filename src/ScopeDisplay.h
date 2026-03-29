@@ -80,6 +80,13 @@ class ScopeDisplay : public juce::Component {
     // Local waveform data (copied from BeatSyncBuffer on UI thread)
     std::vector<float> m_localData;
 
+    static constexpr int REMOTE_ACCUM_BINS = 4096;
+
+    // RMS: 1/16-beat slots, max 8 beats × 16 = 128 slots
+    static constexpr int MAX_METRIC_SLOTS = 128;
+    // Cancellation: fixed fine-grained windows (~4ms each at 4-beat display range)
+    static constexpr int MAX_CANCEL_SLOTS = 256;
+
     // Per-instance accumulation buffers in the receiver's coordinate space.
     // Populated incrementally by setRemoteRawData(). Each entry persists across
     // packets so bins written by earlier packets remain visible until overwritten.
@@ -87,13 +94,16 @@ class ScopeDisplay : public juce::Component {
         // Waveform display: 4096-bin scatter-write (last-write-wins per bin)
         std::vector<float> bins;           // size == REMOTE_ACCUM_BINS
 
-        // RMS accumulation: per MAX_METRIC_SLOTS slot, sum-of-squares and count
-        float rmsAccum[128]{};             // matches MAX_METRIC_SLOTS
-        int   rmsCount[128]{};
+        // RMS accumulation: sum-of-squares and sample count per 1/16-beat slot.
+        // Slot index is normPos × numRmsSlots (= displayRangeBeats × 16, ≤ MAX_METRIC_SLOTS)
+        // so the slot resolution always matches what computeMetrics() reads.
+        float rmsAccum[MAX_METRIC_SLOTS]{};
+        int   rmsCount[MAX_METRIC_SLOTS]{};
 
-        // Cancellation accumulation: per MAX_CANCEL_SLOTS slot, sum-of-squares and count
-        float cancelAccum[256]{};          // matches MAX_CANCEL_SLOTS
-        int   cancelCount[256]{};
+        // Cancellation accumulation: per MAX_CANCEL_SLOTS slot, sum-of-squares and count.
+        // Always uses all MAX_CANCEL_SLOTS slots — computeMetrics iterates all 256.
+        float cancelAccum[MAX_CANCEL_SLOTS]{};
+        int   cancelCount[MAX_CANCEL_SLOTS]{};
 
         double   lastWindowStart = -1e18;  // receiver-space cycle start, for clearing
         uint32_t lastSeqNum      = 0;      // last processed sequence number
@@ -101,8 +111,6 @@ class ScopeDisplay : public juce::Component {
     };
     std::map<uint32_t, RemoteAccumEntry> m_remoteAccumBuffers;
     double m_lastAccumReceiverRange = -1.0; // invalidated when receiver range changes
-
-    static constexpr int REMOTE_ACCUM_BINS = 4096;
 
     // Sample rate for per-sample PPQ reconstruction in setRemoteRawData()
     double m_sampleRate = 44100.0;
@@ -116,11 +124,6 @@ class ScopeDisplay : public juce::Component {
     // Analysis overlays
     bool m_showRms = false;
     bool m_showCancellation = false;
-
-    // RMS: 1/16-beat slots, max 8 beats × 16 = 128 slots
-    static constexpr int MAX_METRIC_SLOTS = 128;
-    // Cancellation: fixed fine-grained windows (~4ms each at 4-beat display range)
-    static constexpr int MAX_CANCEL_SLOTS = 256;
 
     // Per-slot metric arrays, filled by computeMetrics() on the paint thread
     float m_rmsLocal[MAX_METRIC_SLOTS]{};

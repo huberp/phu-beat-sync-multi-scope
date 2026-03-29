@@ -51,6 +51,12 @@ void ScopeDisplay::setRemoteRawData(
         const double bpm = pkt.bpm > 0.0 ? pkt.bpm : 120.0;
         const double ppqPerSample = bpm / (60.0 * sampleRate);
 
+        // Number of active RMS slots for the current display range — must match
+        // computeMetrics() / drawRmsOverlay() so accumulation and read-back use
+        // the same slot granularity (normPos × numRmsSlots maps into 0..numRmsSlots-1).
+        const int numRmsSlots = juce::jlimit(1, MAX_METRIC_SLOTS,
+                                             (int)std::round(m_displayRangeBeats * 16.0));
+
         // Detect receiver-space cycle boundary from the first sample's PPQ.
         // On a new cycle, clear all accum arrays so stale data from the previous
         // cycle does not corrupt RMS/cancellation metrics.
@@ -79,9 +85,10 @@ void ScopeDisplay::setRemoteRawData(
             if (bin >= 0 && bin < REMOTE_ACCUM_BINS)
                 accum.bins[static_cast<size_t>(bin)] = s;
 
-            // RMS accumulation (1/16-beat slots)
-            const int rmsSlot = static_cast<int>(normPos * MAX_METRIC_SLOTS);
-            if (rmsSlot >= 0 && rmsSlot < MAX_METRIC_SLOTS) {
+            // RMS accumulation: slot index uses numRmsSlots (= displayRangeBeats × 16)
+            // so it matches the slot granularity that computeMetrics() reads back.
+            const int rmsSlot = static_cast<int>(normPos * numRmsSlots);
+            if (rmsSlot >= 0 && rmsSlot < numRmsSlots) {
                 accum.rmsAccum[rmsSlot] += s * s;
                 accum.rmsCount[rmsSlot]++;
             }
