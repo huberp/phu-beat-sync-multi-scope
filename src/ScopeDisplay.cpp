@@ -121,13 +121,45 @@ void ScopeDisplay::paint(juce::Graphics& g) {
     // Grid lines
     drawGrid(g, bounds);
 
-    // Analysis overlays — computed and drawn before waveforms so traces sit on top
+    // Analysis overlays — compute metrics and rebuild cached images when needed,
+    // then blit in a single drawImageAt call each repaint.
     if (m_showRms || m_showCancellation)
         computeMetrics();
-    if (m_showRms)
-        drawRmsOverlay(g, bounds);
-    if (m_showCancellation && !m_remoteAccumBuffers.empty())
-        drawCancellationOverlay(g, bounds);
+
+    // Invalidate overlay images when the display area changes
+    const int w = static_cast<int>(bounds.getWidth());
+    const int h = static_cast<int>(bounds.getHeight());
+    if (w != m_lastOverlayWidth || h != m_lastOverlayHeight) {
+        m_rmsOverlayDirty    = true;
+        m_cancelOverlayDirty = true;
+        m_lastOverlayWidth   = w;
+        m_lastOverlayHeight  = h;
+    }
+
+    if (m_showRms) {
+        if (m_rmsOverlayDirty) {
+            m_rmsOverlayImage = juce::Image(
+                juce::Image::ARGB, juce::jmax(1, w), juce::jmax(1, h), true);
+            juce::Graphics ig(m_rmsOverlayImage);
+            drawRmsOverlay(ig, { 0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h) });
+            m_rmsOverlayDirty = false;
+        }
+        g.drawImageAt(m_rmsOverlayImage,
+                      static_cast<int>(bounds.getX()),
+                      static_cast<int>(bounds.getY()));
+    }
+    if (m_showCancellation && !m_remoteAccumBuffers.empty()) {
+        if (m_cancelOverlayDirty) {
+            m_cancelOverlayImage = juce::Image(
+                juce::Image::ARGB, juce::jmax(1, w), juce::jmax(1, h), true);
+            juce::Graphics ig(m_cancelOverlayImage);
+            drawCancellationOverlay(ig, { 0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h) });
+            m_cancelOverlayDirty = false;
+        }
+        g.drawImageAt(m_cancelOverlayImage,
+                      static_cast<int>(bounds.getX()),
+                      static_cast<int>(bounds.getY()));
+    }
 
     // Remote waveforms (drawn first, underneath local)
     if (m_showRemote && !m_remoteAccumBuffers.empty()) {
@@ -357,6 +389,10 @@ void ScopeDisplay::computeMetrics() {
             }
         }
     }
+
+    // Mark cached overlay images stale so they are rebuilt next repaint
+    m_rmsOverlayDirty    = true;
+    m_cancelOverlayDirty = true;
 }
 
 void ScopeDisplay::drawRmsOverlay(juce::Graphics& g, juce::Rectangle<float> area) {

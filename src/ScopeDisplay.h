@@ -123,6 +123,14 @@ class ScopeDisplay : public juce::Component {
     std::vector<int>          m_metricRemoteSizes;
     std::vector<float>        m_metricRemSumSq;
 
+    // Cached overlay images — rebuilt only when data changes, blitted each repaint
+    juce::Image m_rmsOverlayImage;
+    juce::Image m_cancelOverlayImage;
+    bool        m_rmsOverlayDirty    = true;
+    bool        m_cancelOverlayDirty = true;
+    int         m_lastOverlayWidth   = 0;
+    int         m_lastOverlayHeight  = 0;
+
     // Map raw sample value [-1, +1] to Y coordinate
     float sampleToY(float sample, float top, float height) const;
 
