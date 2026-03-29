@@ -177,7 +177,16 @@ void SampleBroadcaster::receiverThreadRun() {
 
         {
             std::lock_guard<std::mutex> lock(receiveMutex);
-            latestPackets[packet.instanceID] = std::move(data);
+            // Wrap-safe freshness check: only store if this packet is newer than
+            // whatever we already have (or if this is the first packet from this
+            // instance). Uses signed subtraction to handle uint32_t wraparound
+            // correctly: positive result means 'data' is strictly newer.
+            auto it = latestPackets.find(data.instanceID);
+            if (it == latestPackets.end() ||
+                static_cast<int32_t>(data.sequenceNumber - it->second.sequenceNumber) > 0)
+            {
+                latestPackets[data.instanceID] = std::move(data);
+            }
         }
     }
 }
