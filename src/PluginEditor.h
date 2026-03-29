@@ -78,6 +78,12 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     // Minimum gap between HP and LP frequencies (Hz)
     static constexpr float MIN_FREQ_GAP = 10.0f;
 
+    // Cached APVTS parameter pointers — avoid string-keyed map lookup at 60 Hz
+    std::atomic<float>* m_pHpEnabled  = nullptr;
+    std::atomic<float>* m_pHpFreq     = nullptr;
+    std::atomic<float>* m_pLpEnabled  = nullptr;
+    std::atomic<float>* m_pLpFreq     = nullptr;
+
 #ifndef NDEBUG
     juce::TextEditor logTextEditor;
     juce::Label logLabel;
