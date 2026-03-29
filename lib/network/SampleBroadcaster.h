@@ -119,6 +119,13 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
      */
     std::vector<RemoteSampleData> getReceivedSamples();
 
+    /**
+     * Output-parameter variant: fills @p out with the latest snapshot, reusing
+     * the vector's existing capacity to avoid per-frame heap allocation.
+     * Prefer this overload on hot paths (e.g. 60 Hz UI timer).
+     */
+    void getReceivedSamples(std::vector<RemoteSampleData>& out);
+
     /** Get number of currently active remote instances. */
     int getNumRemoteInstances() const;
 

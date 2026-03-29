@@ -14,10 +14,13 @@ ScopeDisplay::ScopeDisplay() {
 
 void ScopeDisplay::setLocalData(const float* data, int numBins) {
     m_localData.assign(data, data + numBins);
+    m_rmsOverlayDirty    = true;
+    m_cancelOverlayDirty = true;
 }
 
 void ScopeDisplay::setRemoteData(
     const std::vector<SampleBroadcaster::RemoteSampleData>& remoteData) {
+    // Keep m_remoteData synchronized for metadata/inspection purposes.
     m_remoteData = remoteData;
 
     const double receiverRange = m_displayRangeBeats > 0.0 ? m_displayRangeBeats : 1.0;
@@ -105,6 +108,9 @@ void ScopeDisplay::setRemoteData(
             it = found ? std::next(it) : m_remoteAccumBuffers.erase(it);
         }
     }
+
+    m_rmsOverlayDirty    = true;
+    m_cancelOverlayDirty = true;
 }
 
 // ============================================================================
@@ -120,13 +126,45 @@ void ScopeDisplay::paint(juce::Graphics& g) {
     // Grid lines
     drawGrid(g, bounds);
 
-    // Analysis overlays — computed and drawn before waveforms so traces sit on top
+    // Analysis overlays — compute metrics and rebuild cached images when needed,
+    // then blit in a single drawImageAt call each repaint.
     if (m_showRms || m_showCancellation)
         computeMetrics();
-    if (m_showRms)
-        drawRmsOverlay(g, bounds);
-    if (m_showCancellation && !m_remoteAccumBuffers.empty())
-        drawCancellationOverlay(g, bounds);
+
+    // Invalidate overlay images when the display area changes
+    const int w = static_cast<int>(bounds.getWidth());
+    const int h = static_cast<int>(bounds.getHeight());
+    if (w != m_lastOverlayWidth || h != m_lastOverlayHeight) {
+        m_rmsOverlayDirty    = true;
+        m_cancelOverlayDirty = true;
+        m_lastOverlayWidth   = w;
+        m_lastOverlayHeight  = h;
+    }
+
+    if (m_showRms) {
+        if (m_rmsOverlayDirty) {
+            m_rmsOverlayImage = juce::Image(
+                juce::Image::ARGB, juce::jmax(1, w), juce::jmax(1, h), true);
+            juce::Graphics ig(m_rmsOverlayImage);
+            drawRmsOverlay(ig, { 0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h) });
+            m_rmsOverlayDirty = false;
+        }
+        g.drawImageAt(m_rmsOverlayImage,
+                      static_cast<int>(bounds.getX()),
+                      static_cast<int>(bounds.getY()));
+    }
+    if (m_showCancellation && !m_remoteAccumBuffers.empty()) {
+        if (m_cancelOverlayDirty) {
+            m_cancelOverlayImage = juce::Image(
+                juce::Image::ARGB, juce::jmax(1, w), juce::jmax(1, h), true);
+            juce::Graphics ig(m_cancelOverlayImage);
+            drawCancellationOverlay(ig, { 0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h) });
+            m_cancelOverlayDirty = false;
+        }
+        g.drawImageAt(m_cancelOverlayImage,
+                      static_cast<int>(bounds.getX()),
+                      static_cast<int>(bounds.getY()));
+    }
 
     // Remote waveforms (drawn first, underneath local)
     if (m_showRemote && !m_remoteAccumBuffers.empty()) {
@@ -202,19 +240,42 @@ void ScopeDisplay::drawWaveform(juce::Graphics& g, juce::Rectangle<float> area,
                                 juce::Colour colour, float alpha) {
     if (numBins < 2) return;
 
+    // Decimate to screen pixel width: draw at most one point per pixel column.
+    // When multiple bins map to the same pixel, take the min/max pair and draw
+    // a vertical line segment — this preserves sharp transients at all zoom levels
+    // without aliasing, while reducing path operations from O(numBins) to O(width).
+    const int screenW = juce::jmax(2, static_cast<int>(area.getWidth()));
     juce::Path path;
     bool started = false;
 
-    for (int i = 0; i < numBins; ++i) {
-        float x = area.getX() + (static_cast<float>(i) / static_cast<float>(numBins - 1)) *
-                                     area.getWidth();
-        float y = sampleToY(data[i], area.getY(), area.getHeight());
+    for (int px = 0; px < screenW; ++px) {
+        const float x = area.getX() + static_cast<float>(px);
 
-        if (!started) {
-            path.startNewSubPath(x, y);
-            started = true;
+        // Map pixel column to bin range [binStart, binEnd)
+        const int binStart = px       * numBins / screenW;
+        const int binEnd   = (px + 1) * numBins / screenW;
+
+        if (binStart >= numBins) break;
+
+        if (binEnd <= binStart + 1) {
+            // One bin per pixel: simple line-to
+            const float y = sampleToY(data[binStart], area.getY(), area.getHeight());
+            if (!started) { path.startNewSubPath(x, y); started = true; }
+            else            path.lineTo(x, y);
         } else {
-            path.lineTo(x, y);
+            // Multiple bins per pixel: find min/max for vertical stroke
+            float minV = data[binStart], maxV = data[binStart];
+            for (int b = binStart + 1; b < binEnd && b < numBins; ++b) {
+                if (data[b] < minV) minV = data[b];
+                if (data[b] > maxV) maxV = data[b];
+            }
+            const float yMax = sampleToY(maxV, area.getY(), area.getHeight()); // larger amp = smaller y
+            const float yMin = sampleToY(minV, area.getY(), area.getHeight());
+
+            // Start a new subpath for each vertical min/max stroke so columns
+            // are not connected across X by diagonal segments.
+            path.startNewSubPath(x, yMax);
+            path.lineTo(x, yMin);
         }
     }
 
@@ -241,14 +302,14 @@ void ScopeDisplay::computeMetrics() {
     const int  numRemotes = (int)m_remoteAccumBuffers.size();
     const bool doCancel   = m_showCancellation && !m_remoteAccumBuffers.empty();
 
-    // Cache remote bin pointers for fast inner-loop access
-    std::vector<const float*> remotePtrs;
-    std::vector<int>          remoteSizes;
-    remotePtrs.reserve(static_cast<size_t>(numRemotes));
-    remoteSizes.reserve(static_cast<size_t>(numRemotes));
+    // Reuse class-member scratch vectors to avoid per-frame heap allocation
+    m_metricRemotePtrs.clear();
+    m_metricRemoteSizes.clear();
+    m_metricRemotePtrs.reserve(static_cast<size_t>(numRemotes));
+    m_metricRemoteSizes.reserve(static_cast<size_t>(numRemotes));
     for (const auto& kv : m_remoteAccumBuffers) {
-        remotePtrs.push_back(kv.second.bins.data());
-        remoteSizes.push_back((int)kv.second.bins.size());
+        m_metricRemotePtrs.push_back(kv.second.bins.data());
+        m_metricRemoteSizes.push_back((int)kv.second.bins.size());
     }
 
     // ---- RMS per 1/16-beat slot: RMS of (local + all remotes sum) ----
@@ -261,8 +322,8 @@ void ScopeDisplay::computeMetrics() {
         const int wCount = wEnd - wStart;
         if (wCount <= 0) continue;
 
-        double sumSqLocal = 0.0;
-        double sumSqSum   = 0.0;
+        float sumSqLocal = 0.0f;
+        float sumSqSum   = 0.0f;
 
         for (int b = wStart; b < wEnd; ++b) {
             const int   lb = localBins > 0 ? b * localBins / REMOTE_ACCUM_BINS : 0;
@@ -272,19 +333,20 @@ void ScopeDisplay::computeMetrics() {
 
             float sumVal = lv;
             for (int ri = 0; ri < numRemotes; ++ri) {
-                const float rv = (b < remoteSizes[ri]) ? remotePtrs[ri][b] : 0.0f;
+                const float rv = (b < m_metricRemoteSizes[ri])
+                                     ? m_metricRemotePtrs[ri][b] : 0.0f;
                 sumVal += rv;
             }
             sumSqSum += sumVal * sumVal;
         }
 
-        m_rmsLocal[s] = std::sqrt((float)(sumSqLocal / wCount));
-        m_rmsSum[s]   = std::sqrt((float)(sumSqSum   / wCount));
+        m_rmsLocal[s] = std::sqrt(sumSqLocal / static_cast<float>(wCount));
+        m_rmsSum[s]   = std::sqrt(sumSqSum   / static_cast<float>(wCount));
     }
 
     // ---- Cancellation: fine-grained windows (~4ms each at 4-beat display) ----
     if (doCancel) {
-        std::vector<double> remSumSq(static_cast<size_t>(numRemotes), 0.0);
+        m_metricRemSumSq.assign(static_cast<size_t>(numRemotes), 0.0f);
 
         for (int s = 0; s < MAX_CANCEL_SLOTS; ++s) {
             const int wStart = s       * REMOTE_ACCUM_BINS / MAX_CANCEL_SLOTS;
@@ -292,9 +354,9 @@ void ScopeDisplay::computeMetrics() {
             const int wCount = wEnd - wStart;
             if (wCount <= 0) continue;
 
-            double sumSqLocal = 0.0;
-            double sumSqSum   = 0.0;
-            std::fill(remSumSq.begin(), remSumSq.end(), 0.0);
+            float sumSqLocal = 0.0f;
+            float sumSqSum   = 0.0f;
+            std::fill(m_metricRemSumSq.begin(), m_metricRemSumSq.end(), 0.0f);
 
             for (int b = wStart; b < wEnd; ++b) {
                 const int   lb = localBins > 0 ? b * localBins / REMOTE_ACCUM_BINS : 0;
@@ -304,29 +366,31 @@ void ScopeDisplay::computeMetrics() {
 
                 float sumVal = lv;
                 for (int ri = 0; ri < numRemotes; ++ri) {
-                    const float rv = (b < remoteSizes[ri]) ? remotePtrs[ri][b] : 0.0f;
-                    remSumSq[static_cast<size_t>(ri)] += rv * rv;
+                    const float rv = (b < m_metricRemoteSizes[ri])
+                                         ? m_metricRemotePtrs[ri][b] : 0.0f;
+                    m_metricRemSumSq[static_cast<size_t>(ri)] += rv * rv;
                     sumVal += rv;
                 }
                 sumSqSum += sumVal * sumVal;
             }
 
-            double sumIndividualRms = std::sqrt(sumSqLocal / wCount);
+            float sumIndividualRms = std::sqrt(sumSqLocal / static_cast<float>(wCount));
             for (int ri = 0; ri < numRemotes; ++ri)
-                sumIndividualRms += std::sqrt(remSumSq[static_cast<size_t>(ri)] / wCount);
+                sumIndividualRms += std::sqrt(
+                    m_metricRemSumSq[static_cast<size_t>(ri)] / static_cast<float>(wCount));
 
             // Noise floor at ~-100 dBFS. Was 0.01 to mask 8-bit quantization DC offset.
-            if (sumIndividualRms > 1e-4) {
-                const float rmsSum = std::sqrt((float)(sumSqSum / wCount));
+            if (sumIndividualRms > 1e-4f) {
+                const float rmsSum = std::sqrt(sumSqSum / static_cast<float>(wCount));
                 const float ci = juce::jlimit(
-                    0.0f, 1.0f, 1.0f - rmsSum / (float)sumIndividualRms);
+                    0.0f, 1.0f, 1.0f - rmsSum / sumIndividualRms);
 
                 // Level-weighted CI: cancellation is only meaningful when signal is present.
                 // Weight rises as sqrt(D / D_ref), clamped to 1 above D_ref = 0.1 (-20 dBFS).
                 // At the noise floor (~0.01) weight ≈ 0.32; at -20 dBFS weight = 1.0.
                 constexpr float D_REF = 0.1f;
                 const float levelWeight = std::sqrt(
-                    juce::jlimit(0.0f, 1.0f, (float)(sumIndividualRms / D_REF)));
+                    juce::jlimit(0.0f, 1.0f, sumIndividualRms / D_REF));
                 m_cancellationIndex[s] = ci * levelWeight;
             }
         }

@@ -46,7 +46,13 @@ class ScopeDisplay : public juce::Component {
     void setCurrentPpq(double ppq) { m_currentPpq = ppq; }
 
     /** Set display range in beats. */
-    void setDisplayRangeBeats(double beats) { m_displayRangeBeats = beats; }
+    void setDisplayRangeBeats(double beats) {
+        if (beats != m_displayRangeBeats) {
+            m_displayRangeBeats  = beats;
+            m_rmsOverlayDirty    = true;
+            m_cancelOverlayDirty = true;
+        }
+    }
 
     /** Show per-1/16-beat RMS envelope as horizontal step lines. */
     void setRmsOverlayEnabled(bool enabled) { m_showRms = enabled; }
@@ -117,6 +123,19 @@ class ScopeDisplay : public juce::Component {
 
     // Amplitude scale factor applied to Y-axis display [0.5, 4.0]
     float m_amplitudeScale = 1.0f;
+
+    // Reusable scratch vectors for computeMetrics() — allocated once, reused every frame
+    std::vector<const float*> m_metricRemotePtrs;
+    std::vector<int>          m_metricRemoteSizes;
+    std::vector<float>        m_metricRemSumSq;
+
+    // Cached overlay images — rebuilt only when data changes, blitted each repaint
+    juce::Image m_rmsOverlayImage;
+    juce::Image m_cancelOverlayImage;
+    bool        m_rmsOverlayDirty    = true;
+    bool        m_cancelOverlayDirty = true;
+    int         m_lastOverlayWidth   = 0;
+    int         m_lastOverlayHeight  = 0;
 
     // Map raw sample value [-1, +1] to Y coordinate
     float sampleToY(float sample, float top, float height) const;

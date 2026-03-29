@@ -153,6 +153,12 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
     };
     addAndMakeVisible(amplitudeSlider);
 
+    // Cache raw parameter pointers once — avoids repeated string-keyed map lookups at 60 Hz
+    m_pHpEnabled = audioProcessor.getAPVTS().getRawParameterValue("display_hp_enabled");
+    m_pHpFreq    = audioProcessor.getAPVTS().getRawParameterValue("display_hp_freq");
+    m_pLpEnabled = audioProcessor.getAPVTS().getRawParameterValue("display_lp_enabled");
+    m_pLpFreq    = audioProcessor.getAPVTS().getRawParameterValue("display_lp_freq");
+
     // Register as APVTS listener to enforce constraint on external parameter changes
     audioProcessor.getAPVTS().addParameterListener("display_hp_freq", this);
     audioProcessor.getAPVTS().addParameterListener("display_lp_freq", this);
@@ -298,26 +304,24 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
     if (syncBuf.size() > 0) {
         // --- Update filter coefficients if sample rate or frequency changed ---
         const double sampleRate = audioProcessor.getSampleRate();
-        const float hpFreq = audioProcessor.getAPVTS()
-                                 .getRawParameterValue("display_hp_freq")->load();
-        const float lpFreq = audioProcessor.getAPVTS()
-                                 .getRawParameterValue("display_lp_freq")->load();
 
         if (sampleRate > 0.0) {
             const bool srChanged = (sampleRate != m_lastSampleRate);
-            if (srChanged || hpFreq != m_lastHpFreq) {
+            const float hpFreqNow = m_pHpFreq->load(std::memory_order_relaxed);
+            const float lpFreqNow = m_pLpFreq->load(std::memory_order_relaxed);
+            if (srChanged || hpFreqNow != m_lastHpFreq) {
                 m_displayHP.setParams(LinkwitzRiley::FilterType::HighPass,
                                       LinkwitzRiley::Slope::DB48,
-                                      hpFreq, static_cast<float>(sampleRate));
+                                      hpFreqNow, static_cast<float>(sampleRate));
                 m_displayHP.reset();
-                m_lastHpFreq = hpFreq;
+                m_lastHpFreq = hpFreqNow;
             }
-            if (srChanged || lpFreq != m_lastLpFreq) {
+            if (srChanged || lpFreqNow != m_lastLpFreq) {
                 m_displayLP.setParams(LinkwitzRiley::FilterType::LowPass,
                                       LinkwitzRiley::Slope::DB48,
-                                      lpFreq, static_cast<float>(sampleRate));
+                                      lpFreqNow, static_cast<float>(sampleRate));
                 m_displayLP.reset();
-                m_lastLpFreq = lpFreq;
+                m_lastLpFreq = lpFreqNow;
             }
             m_lastSampleRate = sampleRate;
         }
@@ -328,10 +332,8 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
             m_displayWorkBuf.resize(static_cast<size_t>(numBins));
         std::copy(syncBuf.data(), syncBuf.data() + numBins, m_displayWorkBuf.begin());
 
-        const bool hpEnabled = audioProcessor.getAPVTS()
-                                   .getRawParameterValue("display_hp_enabled")->load() > 0.5f;
-        const bool lpEnabled = audioProcessor.getAPVTS()
-                                   .getRawParameterValue("display_lp_enabled")->load() > 0.5f;
+        const bool hpEnabled = m_pHpEnabled->load(std::memory_order_relaxed) > 0.5f;
+        const bool lpEnabled = m_pLpEnabled->load(std::memory_order_relaxed) > 0.5f;
 
         if (hpEnabled) {
             for (auto& s : m_displayWorkBuf)
@@ -356,8 +358,10 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
 
     // Get remote data if enabled (network receive on UI thread, per requirement)
     if (remoteDisplayToggle.getToggleState()) {
-        auto remoteSamples = audioProcessor.getSampleBroadcaster().getReceivedSamples();
-        scopeDisplay.setRemoteData(remoteSamples);
+        // Use the persistent cache vector — reuses its capacity each frame,
+        // avoiding a heap allocation per 60 Hz tick.
+        audioProcessor.getSampleBroadcaster().getReceivedSamples(m_remoteDataCache);
+        scopeDisplay.setRemoteData(m_remoteDataCache);
     } else {
         scopeDisplay.setRemoteData({});
     }
