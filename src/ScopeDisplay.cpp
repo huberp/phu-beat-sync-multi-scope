@@ -14,6 +14,8 @@ ScopeDisplay::ScopeDisplay() {
 
 void ScopeDisplay::setLocalData(const float* data, int numBins) {
     m_localData.assign(data, data + numBins);
+    m_rmsOverlayDirty    = true;
+    m_cancelOverlayDirty = true;
 }
 
 void ScopeDisplay::setRemoteData(
@@ -106,6 +108,9 @@ void ScopeDisplay::setRemoteData(
             it = found ? std::next(it) : m_remoteAccumBuffers.erase(it);
         }
     }
+
+    m_rmsOverlayDirty    = true;
+    m_cancelOverlayDirty = true;
 }
 
 // ============================================================================
@@ -390,10 +395,6 @@ void ScopeDisplay::computeMetrics() {
             }
         }
     }
-
-    // Mark cached overlay images stale so they are rebuilt next repaint
-    m_rmsOverlayDirty    = true;
-    m_cancelOverlayDirty = true;
 }
 
 void ScopeDisplay::drawRmsOverlay(juce::Graphics& g, juce::Rectangle<float> area) {

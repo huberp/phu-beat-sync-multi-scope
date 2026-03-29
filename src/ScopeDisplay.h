@@ -46,7 +46,13 @@ class ScopeDisplay : public juce::Component {
     void setCurrentPpq(double ppq) { m_currentPpq = ppq; }
 
     /** Set display range in beats. */
-    void setDisplayRangeBeats(double beats) { m_displayRangeBeats = beats; }
+    void setDisplayRangeBeats(double beats) {
+        if (beats != m_displayRangeBeats) {
+            m_displayRangeBeats  = beats;
+            m_rmsOverlayDirty    = true;
+            m_cancelOverlayDirty = true;
+        }
+    }
 
     /** Show per-1/16-beat RMS envelope as horizontal step lines. */
     void setRmsOverlayEnabled(bool enabled) { m_showRms = enabled; }
