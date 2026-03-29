@@ -3,6 +3,10 @@
 #include <algorithm>
 #include <cstring>
 
+#ifndef NDEBUG
+    #include <cstdio>
+#endif
+
 namespace phu {
 namespace network {
 
@@ -24,9 +28,9 @@ namespace network {
 // Protocol magic number: "SMPL" in ASCII
 static constexpr uint32_t PROTOCOL_MAGIC = 0x534D504C;
 
-// Byte offset of the samples array within SamplePacket (fixed header size)
-static constexpr int kSamplePacketHeaderSize =
-    static_cast<int>(offsetof(SampleBroadcaster::SamplePacket, samples));
+// Fixed header size in bytes (byte offset of the samples array within RawSamplesPacket)
+static constexpr int kRawPacketHeaderSize =
+    static_cast<int>(offsetof(SampleBroadcaster::RawSamplesPacket, samples));
 
 // ============================================================================
 // Construction
@@ -41,60 +45,39 @@ SampleBroadcaster::SampleBroadcaster()
 
 void SampleBroadcaster::onShutdown() {
     std::lock_guard<std::mutex> lock(receiveMutex);
-    latestSamples.clear();
+    latestPackets.clear();
+    lastSeqNums.clear();
 }
 
 // ============================================================================
 // Broadcasting
 // ============================================================================
 
-bool SampleBroadcaster::broadcastSamples(const float* sampleData, int numBins,
-                                         double ppqPosition, double bpm,
-                                         float displayRangeBeats) {
-    if (!networkInitialized || !broadcastEnabled.load() || sendSocket == INVALID_SOCKET_VALUE) {
+bool SampleBroadcaster::broadcastRawSamples(const float* samples, int numSamples,
+                                            double ppqOfFirstSample, double bpm,
+                                            float displayRangeBeats, uint32_t seqNum) {
+    if (!networkInitialized || !broadcastEnabled.load() || sendSocket == INVALID_SOCKET_VALUE)
         return false;
-    }
 
-    // Throttle broadcasts
-    int64_t now = getCurrentTimeMs();
-    if (now - lastBroadcastTime < minBroadcastIntervalMs) {
-        return false; // Throttled
-    }
-    lastBroadcastTime = now;
+    if (numSamples <= 0 || numSamples > BROADCAST_CHUNK_SAMPLES)
+        return false;
 
-    // Create packet
-    SamplePacket packet;
+    RawSamplesPacket packet;
     std::memset(&packet, 0, sizeof(packet));
-    packet.magic = PROTOCOL_MAGIC;
-    packet.version = PROTOCOL_VERSION;
-    packet.instanceID = instanceID;
-    packet.timestamp = static_cast<uint64_t>(now);
-    packet.ppqPosition = ppqPosition;
-    packet.bpm = bpm;
+    packet.magic             = PROTOCOL_MAGIC;
+    packet.version           = PROTOCOL_VERSION;
+    packet.instanceID        = instanceID;
+    packet.sequenceNumber    = seqNum;
+    packet.ppqOfFirstSample  = ppqOfFirstSample;
+    packet.bpm               = bpm;
     packet.displayRangeBeats = displayRangeBeats;
+    packet.numSamples        = static_cast<uint16_t>(numSamples);
+    std::memcpy(packet.samples, samples, sizeof(float) * static_cast<size_t>(numSamples));
 
-    // Downsample to MAX_WIRE_BINS using stride sampling to preserve the bin-to-position
-    // coordinate mapping. A flat first-N copy would transmit only the first half of the
-    // sender's range (BeatSyncBuffer has SYNC_BINS bins, wire cap is MAX_WIRE_BINS). The
-    // receiver reconstructs PPQ as: absolutePpq = senderWindowStart + (j / numBins) * senderRange.
-    // With stride = numBins / outputBins, output bin j comes from input bin j * stride,
-    // whose normalized position j * stride / numBins = j / outputBins — the same fraction
-    // the receiver will compute — so PPQ reconstruction is exact.
-    int outputBins = (std::min)(numBins, MAX_WIRE_BINS);
-    packet.numBins = static_cast<uint16_t>(outputBins);
-    if (numBins <= MAX_WIRE_BINS) {
-        std::memcpy(packet.samples, sampleData, sizeof(float) * static_cast<size_t>(outputBins));
-    } else {
-        const int stride = numBins / outputBins;
-        for (int j = 0; j < outputBins; ++j)
-            packet.samples[j] = sampleData[j * stride];
-    }
-
-    // Send only the header + the bins actually used (variable-length)
     auto* addr = static_cast<sockaddr_in*>(multicastAddr);
-    const int payloadSize = kSamplePacketHeaderSize + static_cast<int>(sizeof(float)) * outputBins;
+    const int payloadSize = kRawPacketHeaderSize + static_cast<int>(sizeof(float)) * numSamples;
     int bytesSent =
-        sendto(sendSocket, reinterpret_cast<const char*>(&packet), payloadSize, 0,
+        sendto(sendSocket, reinterpret_cast<const char*>(&packet), static_cast<size_t>(payloadSize), 0,
                reinterpret_cast<struct sockaddr*>(addr), sizeof(sockaddr_in));
 
     return bytesSent > 0;
@@ -104,23 +87,22 @@ bool SampleBroadcaster::broadcastSamples(const float* sampleData, int numBins,
 // Receiving
 // ============================================================================
 
-std::vector<SampleBroadcaster::RemoteSampleData> SampleBroadcaster::getReceivedSamples() {
-    std::vector<RemoteSampleData> results;
-    getReceivedSamples(results);
+std::vector<SampleBroadcaster::RemoteRawPacket> SampleBroadcaster::getReceivedPackets() {
+    std::vector<RemoteRawPacket> results;
+    getReceivedPackets(results);
     return results;
 }
 
-void SampleBroadcaster::getReceivedSamples(std::vector<RemoteSampleData>& out) {
+void SampleBroadcaster::getReceivedPackets(std::vector<RemoteRawPacket>& out) {
     out.clear();
     int64_t now = getCurrentTimeMs();
 
     std::lock_guard<std::mutex> lock(receiveMutex);
 
-    // Collect all non-stale entries and prune stale ones
-    auto it = latestSamples.begin();
-    while (it != latestSamples.end()) {
+    auto it = latestPackets.begin();
+    while (it != latestPackets.end()) {
         if (now - it->second.timestamp > STALE_TIMEOUT_MS) {
-            it = latestSamples.erase(it); // Prune stale entry
+            it = latestPackets.erase(it); // Prune stale entry
         } else {
             out.push_back(it->second);
             ++it;
@@ -130,11 +112,11 @@ void SampleBroadcaster::getReceivedSamples(std::vector<RemoteSampleData>& out) {
 
 int SampleBroadcaster::getNumRemoteInstances() const {
     std::lock_guard<std::mutex> lock(receiveMutex);
-    return static_cast<int>(latestSamples.size());
+    return static_cast<int>(latestPackets.size());
 }
 
 void SampleBroadcaster::receiverThreadRun() {
-    SamplePacket packet;
+    RawSamplesPacket packet;
 
     while (running.load()) {
         if (!receiveEnabled.load()) {
@@ -146,48 +128,65 @@ void SampleBroadcaster::receiverThreadRun() {
         int bytesReceived =
             recvfrom(recvSocket, reinterpret_cast<char*>(&packet), sizeof(packet), 0, nullptr, nullptr);
 
-        if (bytesReceived < kSamplePacketHeaderSize) {
-            // Not enough data for a valid header — timeout or truncated packet
-            continue;
-        }
+        if (bytesReceived < kRawPacketHeaderSize)
+            continue; // Timeout or truncated header
 
-        // Validate packet
-        if (packet.magic != PROTOCOL_MAGIC) {
-            continue; // Not our protocol
-        }
-
-        // Reject packets from incompatible protocol versions
-        if (packet.version != PROTOCOL_VERSION) {
+        // Validate magic and version
+        if (packet.magic != PROTOCOL_MAGIC)
             continue;
-        }
+        if (packet.version != PROTOCOL_VERSION)
+            continue;
 
         // Ignore our own broadcasts
-        if (packet.instanceID == instanceID) {
+        if (packet.instanceID == instanceID)
             continue;
-        }
 
-        // Validate bin count and that we received enough bytes for the declared bins
-        if (packet.numBins == 0 || packet.numBins > MAX_WIRE_BINS) {
+        // Validate sample count
+        if (packet.numSamples == 0 || packet.numSamples > BROADCAST_CHUNK_SAMPLES)
             continue;
-        }
-        const int expectedSize = kSamplePacketHeaderSize + static_cast<int>(sizeof(float)) * packet.numBins;
-        if (bytesReceived < expectedSize) {
-            continue;
-        }
 
-        // Copy float samples directly and store in map
-        RemoteSampleData data;
-        data.instanceID        = packet.instanceID;
-        data.timestamp         = getCurrentTimeMs(); // Use local time for staleness check
-        data.ppqPosition       = packet.ppqPosition;
-        data.bpm               = packet.bpm;
+        const int expectedSize = kRawPacketHeaderSize + static_cast<int>(sizeof(float)) * packet.numSamples;
+        if (bytesReceived < expectedSize)
+            continue;
+
+#ifndef NDEBUG
+        // Check sequence number continuity — log gaps (loopback should never drop)
+        {
+            auto seqIt = lastSeqNums.find(packet.instanceID);
+            if (seqIt != lastSeqNums.end()) {
+                const uint32_t expected = seqIt->second + 1;
+                if (packet.sequenceNumber != expected) {
+                    std::fprintf(stderr,
+                        "[SampleBroadcaster] seq gap from instance %u: expected %u got %u\n",
+                        packet.instanceID, expected, packet.sequenceNumber);
+                }
+            }
+            lastSeqNums[packet.instanceID] = packet.sequenceNumber;
+        }
+#endif
+
+        RemoteRawPacket data;
+        data.instanceID       = packet.instanceID;
+        data.timestamp        = getCurrentTimeMs();
+        data.sequenceNumber   = packet.sequenceNumber;
+        data.ppqOfFirstSample = packet.ppqOfFirstSample;
+        data.bpm              = packet.bpm;
         data.displayRangeBeats = packet.displayRangeBeats;
-        data.samples.resize(packet.numBins);
-        std::memcpy(data.samples.data(), packet.samples, sizeof(float) * packet.numBins);
+        data.numSamples       = packet.numSamples;
+        std::memcpy(data.samples, packet.samples, sizeof(float) * packet.numSamples);
 
         {
             std::lock_guard<std::mutex> lock(receiveMutex);
-            latestSamples[packet.instanceID] = std::move(data);
+            // Wrap-safe freshness check: only store if this packet is newer than
+            // whatever we already have (or if this is the first packet from this
+            // instance). Uses signed subtraction to handle uint32_t wraparound
+            // correctly: positive result means 'data' is strictly newer.
+            auto it = latestPackets.find(data.instanceID);
+            if (it == latestPackets.end() ||
+                static_cast<int32_t>(data.sequenceNumber - it->second.sequenceNumber) > 0)
+            {
+                latestPackets[data.instanceID] = std::move(data);
+            }
         }
     }
 }

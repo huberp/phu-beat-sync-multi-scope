@@ -72,8 +72,8 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     // Working buffer for display filter application (persistent to avoid per-tick allocation)
     std::vector<float> m_displayWorkBuf;
 
-    // Persistent cache for remote sample data — reused each frame to avoid heap allocation
-    std::vector<SampleBroadcaster::RemoteSampleData> m_remoteDataCache;
+    // Persistent cache for remote raw packets — reused each frame to avoid heap allocation
+    std::vector<SampleBroadcaster::RemoteRawPacket> m_remoteDataCache;
 
     // Track last BPM-derived max display range to avoid redundant combo-box updates
     double m_lastMaxDisplayBeats = 8.0;

@@ -13,8 +13,8 @@ using phu::network::SampleBroadcaster;
  * ScopeDisplay — beat-synced oscilloscope display component.
  *
  * Renders local BeatSyncBuffer data as a waveform trace indexed by musical position.
- * Also renders remote waveform data received via SampleBroadcaster, with an option
- * to show/hide remote traces (following the pattern from phu-splitter).
+ * Also renders remote waveform data received via SampleBroadcaster, reconstructed
+ * from raw sample packets using per-sample PPQ computation.
  *
  * The display shows raw audio sample data mapped to pixel coordinates:
  * - X axis: musical position [0, 1) normalized within display range
@@ -31,8 +31,16 @@ class ScopeDisplay : public juce::Component {
     /** Set local beat-synced waveform data for rendering (from BeatSyncBuffer). */
     void setLocalData(const float* data, int numBins);
 
-    /** Set remote waveform data received from other instances. */
-    void setRemoteData(const std::vector<SampleBroadcaster::RemoteSampleData>& remoteData);
+    /**
+     * Set remote raw sample packets received from other instances.
+     * Scatter-writes each sample into the receiver's coordinate space using
+     * per-sample PPQ reconstruction, and accumulates into RMS/cancellation
+     * metric buffers. sampleRate must be set via setSampleRate() first.
+     */
+    void setRemoteRawData(const std::vector<SampleBroadcaster::RemoteRawPacket>& remoteData);
+
+    /** Set the sample rate used for per-sample PPQ reconstruction. */
+    void setSampleRate(double sampleRate) { m_sampleRate = sampleRate; }
 
     /** Enable or disable rendering of local data (toggle). */
     void setLocalDisplayEnabled(bool enabled) { m_showLocal = enabled; }
@@ -72,21 +80,40 @@ class ScopeDisplay : public juce::Component {
     // Local waveform data (copied from BeatSyncBuffer on UI thread)
     std::vector<float> m_localData;
 
-    // Remote waveform data from other instances (raw, kept for metadata only)
-    std::vector<SampleBroadcaster::RemoteSampleData> m_remoteData;
+    static constexpr int REMOTE_ACCUM_BINS = 4096;
 
-    // Per-instance accumulation buffers already projected into the receiver's coordinate
-    // space. Populated incrementally by setRemoteData() so bins written by previous
-    // packets persist until overwritten — prevents blinking when senderRange < receiverRange
-    // and prevents double-painting when senderRange > receiverRange.
+    // RMS: 1/16-beat slots, max 8 beats × 16 = 128 slots
+    static constexpr int MAX_METRIC_SLOTS = 128;
+    // Cancellation: fixed fine-grained windows (~4ms each at 4-beat display range)
+    static constexpr int MAX_CANCEL_SLOTS = 256;
+
+    // Per-instance accumulation buffers in the receiver's coordinate space.
+    // Populated incrementally by setRemoteRawData(). Each entry persists across
+    // packets so bins written by earlier packets remain visible until overwritten.
     struct RemoteAccumEntry {
-        std::vector<float> bins;          // size == REMOTE_ACCUM_BINS, receiver-normalised
-        double lastWindowStart = -1e18;   // sender's ppq window start from last packet
+        // Waveform display: 4096-bin scatter-write (last-write-wins per bin)
+        std::vector<float> bins;           // size == REMOTE_ACCUM_BINS
+
+        // RMS accumulation: sum-of-squares and sample count per 1/16-beat slot.
+        // Slot index is normPos × numRmsSlots (= displayRangeBeats × 16, ≤ MAX_METRIC_SLOTS)
+        // so the slot resolution always matches what computeMetrics() reads.
+        float rmsAccum[MAX_METRIC_SLOTS]{};
+        int   rmsCount[MAX_METRIC_SLOTS]{};
+
+        // Cancellation accumulation: per MAX_CANCEL_SLOTS slot, sum-of-squares and count.
+        // Always uses all MAX_CANCEL_SLOTS slots — computeMetrics iterates all 256.
+        float cancelAccum[MAX_CANCEL_SLOTS]{};
+        int   cancelCount[MAX_CANCEL_SLOTS]{};
+
+        double   lastWindowStart = -1e18;  // receiver-space cycle start, for clearing
+        uint32_t lastSeqNum      = 0;      // last processed sequence number
+        bool     hasSeq          = false;  // true once at least one packet has been processed
     };
     std::map<uint32_t, RemoteAccumEntry> m_remoteAccumBuffers;
     double m_lastAccumReceiverRange = -1.0; // invalidated when receiver range changes
 
-    static constexpr int REMOTE_ACCUM_BINS = SampleBroadcaster::SYNC_BINS;
+    // Sample rate for per-sample PPQ reconstruction in setRemoteRawData()
+    double m_sampleRate = 44100.0;
 
     // Display state
     bool m_showLocal = true;
@@ -98,14 +125,9 @@ class ScopeDisplay : public juce::Component {
     bool m_showRms = false;
     bool m_showCancellation = false;
 
-    // RMS: 1/16-beat slots, max 8 beats × 16 = 128 slots
-    static constexpr int MAX_METRIC_SLOTS = 128;
-    // Cancellation: fixed fine-grained windows (~4ms each at 4-beat display range)
-    static constexpr int MAX_CANCEL_SLOTS = 256;
-
     // Per-slot metric arrays, filled by computeMetrics() on the paint thread
     float m_rmsLocal[MAX_METRIC_SLOTS]{};
-    float m_rmsSum[MAX_METRIC_SLOTS]{};       // RMS of (local + all remotes) per slot
+    float m_rmsSum[MAX_METRIC_SLOTS]{};       // rmsLocal + sum of per-remote RMS, per slot
     float m_cancellationIndex[MAX_CANCEL_SLOTS]{};
 
     // Drawing helpers
@@ -114,7 +136,7 @@ class ScopeDisplay : public juce::Component {
                       const float* data, int numBins, juce::Colour colour, float alpha = 1.0f);
     void drawPlayhead(juce::Graphics& g, juce::Rectangle<float> area);
 
-    /** Compute m_rmsLocal[] and m_cancellationIndex[] from the current local/remote buffers. */
+    /** Compute m_rmsLocal[], m_rmsSum[], and m_cancellationIndex[] from current buffers. */
     void computeMetrics();
     /** Draw RMS step-envelope lines (called after drawGrid, before waveforms). */
     void drawRmsOverlay(juce::Graphics& g, juce::Rectangle<float> area);
@@ -127,7 +149,6 @@ class ScopeDisplay : public juce::Component {
     // Reusable scratch vectors for computeMetrics() — allocated once, reused every frame
     std::vector<const float*> m_metricRemotePtrs;
     std::vector<int>          m_metricRemoteSizes;
-    std::vector<float>        m_metricRemSumSq;
 
     // Cached overlay images — rebuilt only when data changes, blitted each repaint
     juce::Image m_rmsOverlayImage;

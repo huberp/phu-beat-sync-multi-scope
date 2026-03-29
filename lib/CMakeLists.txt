@@ -8,6 +8,7 @@ target_include_directories(BeatSyncLib INTERFACE
 target_sources(BeatSyncLib INTERFACE
     # Audio components
     ${CMAKE_CURRENT_SOURCE_DIR}/audio/AudioSampleFifo.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/audio/AudioSampleRingBuffer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/audio/BeatSyncBuffer.h
 
     # Event system components

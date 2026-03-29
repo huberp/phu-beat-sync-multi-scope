@@ -11,26 +11,25 @@ namespace phu {
 namespace network {
 
 /**
- * SampleBroadcaster: UDP multicast broadcaster/receiver for sharing
- * beat-synced waveform (oscilloscope) data between plugin instances.
+ * SampleBroadcaster: UDP multicast broadcaster/receiver for sharing raw audio
+ * sample streams between plugin instances on the same machine (localhost only).
  *
- * This extends the SpectrumBroadcaster pattern from phu-splitter,
- * adapted to send beat-synced sample data (BeatSyncBuffer contents)
- * instead of FFT spectrum data. Each packet includes a PPQ reference
- * so receivers can align their display to the same musical position.
+ * Sender path: the audio thread pushes every mono sample into a ring buffer;
+ * the processor timer (~30 Hz) drains full chunks and sends each chunk as a
+ * RawSamplesPacket tagged with the PPQ position of its first sample.
  *
- * Architecture:
- * - Sender: called from UI timer thread, copies float BeatSyncBuffer
- *   contents and multicasts via variable-length UDP packets with PPQ info.
- * - Receiver: dedicated background thread receives packets and stores
- *   the latest sample data per remote instance in a mutex-protected map.
- * - Reader: UI thread calls getReceivedSamples() to get a snapshot of all
- *   currently active remote instances' waveform data.
+ * Receiver path: a dedicated background thread receives packets and stores
+ * the latest packet per remote instance in a mutex-protected map.  The UI
+ * thread calls getReceivedPackets() to get a snapshot and passes it to
+ * ScopeDisplay::setRemoteRawData(), which performs all projection and metric
+ * accumulation.
  *
  * Thread safety:
- * - broadcastSamples() is safe to call from any single thread (timer/UI)
- * - getReceivedSamples() is safe to call from any thread
+ * - broadcastRawSamples() is safe to call from any single thread (timer/message)
+ * - getReceivedPackets() is safe to call from any thread
  * - Receiver thread is managed internally
+ *
+ * LOCALHOST-ONLY: see MulticastBroadcasterBase for the MTU assumption.
  */
 class SampleBroadcaster : public MulticastBroadcasterBase {
   public:
@@ -41,50 +40,50 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     static constexpr int MULTICAST_PORT = 49423;
 
     /**
-     * Receiver-side accum buffer resolution — matches sender's BeatSyncBuffer exactly.
-     * Must equal PluginProcessor::NUM_SYNC_BINS (4096).
+     * Number of raw mono samples sent per packet.
+     * Chosen so that one packet covers approximately 33 ms at 44.1 kHz.
+     * Loopback only — packet size is not constrained by the Ethernet MTU.
      */
-    static constexpr int SYNC_BINS = 4096;
-
-    /**
-     * Maximum bins transmitted per packet, bounded by safe UDP payload size (~8 KB).
-     * Sender downsamples from SYNC_BINS to MAX_WIRE_BINS when sending.
-     * Computed as (8192 - 44 byte header) / 4 bytes per float.
-     */
-    static constexpr int MAX_WIRE_BINS = 2036;
+    static constexpr int BROADCAST_CHUNK_SAMPLES = 1470;
 
     /** Protocol version — bumped when wire format changes. */
-    static constexpr uint32_t PROTOCOL_VERSION = 2;
+    static constexpr uint32_t PROTOCOL_VERSION = 3;
 
     /** Time in milliseconds after which a remote instance is considered stale. */
     static constexpr int64_t STALE_TIMEOUT_MS = 3000;
 
-    // Sample packet structure (packed for network transmission)
+    // Raw-samples packet structure (packed for network transmission).
+    // Carries a complete chunk of raw mono float samples tagged with the PPQ
+    // position of the first sample and enough DAW context for the receiver to
+    // reconstruct per-sample PPQ via:
+    //   ppq_i = ppqOfFirstSample + i * (bpm / (60.0 * receiverSampleRate))
     #pragma pack(push, 1)
-    struct SamplePacket {
-        uint32_t magic;                    // Protocol magic: 0x534D504C ("SMPL")
-        uint32_t version;                  // Protocol version: 2
-        uint32_t instanceID;               // Unique instance identifier
-        uint64_t timestamp;                // Timestamp in milliseconds
-        double ppqPosition;                // PPQ position reference for beat sync
-        double bpm;                        // Current BPM for receiver display sync
-        float displayRangeBeats;           // Musical range this buffer covers
-        uint16_t numBins;                  // Number of sample bins (up to MAX_WIRE_BINS)
-        float    samples[MAX_WIRE_BINS];   // Float waveform data [-1, +1]
+    struct RawSamplesPacket {
+        uint32_t magic;               // Protocol magic: 0x534D504C ("SMPL")
+        uint32_t version;             // Protocol version: 3
+        uint32_t instanceID;          // Unique instance identifier
+        uint32_t sequenceNumber;      // Monotonic per-sender, wraps at UINT32_MAX
+        double   ppqOfFirstSample;    // Absolute PPQ position of samples[0]
+        double   bpm;                 // Sender BPM (used by receiver for ppq_i reconstruction)
+        float    displayRangeBeats;   // Sender's display range (beats)
+        uint16_t numSamples;          // Number of samples in this packet (≤ BROADCAST_CHUNK_SAMPLES)
+        float    samples[BROADCAST_CHUNK_SAMPLES]; // Raw mono float audio [-1, +1]
     };
     #pragma pack(pop)
 
     /**
-     * Received sample data from a remote plugin instance (unpacked for rendering).
-     * Values are raw linear samples [-1, +1], suitable for direct oscilloscope rendering.
+     * Received raw-sample packet from a remote plugin instance.
+     * Mirrors RawSamplesPacket plus a local receive timestamp for staleness checks.
      */
-    struct RemoteSampleData {
-        uint32_t instanceID = 0;
-        int64_t timestamp = 0;
-        double ppqPosition = 0.0;
-        double bpm = 0.0;
-        float displayRangeBeats = 1.0f;
-        std::vector<float> samples; ///< linear sample values [-1, +1]
+    struct RemoteRawPacket {
+        uint32_t instanceID          = 0;
+        int64_t  timestamp           = 0;    ///< local receive time (ms) for staleness
+        uint32_t sequenceNumber      = 0;
+        double   ppqOfFirstSample    = 0.0;
+        double   bpm                 = 0.0;
+        float    displayRangeBeats   = 1.0f;
+        uint16_t numSamples          = 0;
+        float    samples[BROADCAST_CHUNK_SAMPLES]{};
     };
 
     SampleBroadcaster();
@@ -101,40 +100,35 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     void setReceiveEnabled(bool enabled) { receiveEnabled.store(enabled); }
 
     /**
-     * Set minimum interval between broadcasts (throttling).
-     * @param intervalMs Minimum milliseconds between broadcasts (default: 33ms = ~30Hz)
-     */
-    void setBroadcastInterval(int intervalMs) { minBroadcastIntervalMs = intervalMs; }
-
-    /**
-     * Broadcast beat-synced sample data to all instances on the multicast group.
-     * Sample values are sent as raw floats in a variable-length packet.
+     * Broadcast a chunk of raw mono samples to all instances on the multicast group.
      *
-     * @param sampleData   BeatSyncBuffer data array (linear [-1, +1])
-     * @param numBins      Number of bins in the sample data array
-     * @param ppqPosition  Current PPQ position for beat sync alignment
-     * @param bpm          Current BPM
-     * @param displayRangeBeats Musical range this buffer covers (e.g., 1.0 = one beat)
-     * @return true if broadcast succeeded, false if throttled or error
+     * @param samples            Raw mono float samples [-1, +1]
+     * @param numSamples         Number of samples (must be ≤ BROADCAST_CHUNK_SAMPLES)
+     * @param ppqOfFirstSample   Absolute PPQ position of samples[0]
+     * @param bpm                Current BPM
+     * @param displayRangeBeats  Sender's display range in beats
+     * @param seqNum             Monotonic sequence number (message-thread only)
+     * @return true if the packet was sent, false if disabled or a socket error occurred
      */
-    bool broadcastSamples(const float* sampleData, int numBins,
-                          double ppqPosition, double bpm, float displayRangeBeats);
+    bool broadcastRawSamples(const float* samples, int numSamples,
+                             double ppqOfFirstSample, double bpm,
+                             float displayRangeBeats, uint32_t seqNum);
 
     /**
-     * Get latest received sample data for each active remote instance.
+     * Get the latest received raw packet for each active remote instance.
      * Returns a snapshot — does not drain a queue. Stale entries (> STALE_TIMEOUT_MS)
      * are automatically pruned.
      *
-     * @return Vector of the latest sample data per remote instance
+     * @return Vector of the latest raw packet per remote instance
      */
-    std::vector<RemoteSampleData> getReceivedSamples();
+    std::vector<RemoteRawPacket> getReceivedPackets();
 
     /**
      * Output-parameter variant: fills @p out with the latest snapshot, reusing
      * the vector's existing capacity to avoid per-frame heap allocation.
      * Prefer this overload on hot paths (e.g. 60 Hz UI timer).
      */
-    void getReceivedSamples(std::vector<RemoteSampleData>& out);
+    void getReceivedPackets(std::vector<RemoteRawPacket>& out);
 
     /** Get number of currently active remote instances. */
     int getNumRemoteInstances() const;
@@ -145,18 +139,17 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     void onShutdown() override;
 
   private:
-    // Sample-specific state
+    // Broadcasting state
     std::atomic<bool> broadcastEnabled{false};
     std::atomic<bool> receiveEnabled{true};
 
-    // Broadcast throttling
-    int minBroadcastIntervalMs = 33; // ~30 Hz default
-    int64_t lastBroadcastTime = 0;
-
-    // Mutex-protected map: latest sample data per remote instance ID.
-    // The receiver thread writes, the UI thread reads via getReceivedSamples().
+    // Mutex-protected map: latest raw packet per remote instance ID.
+    // The receiver thread writes, the UI thread reads via getReceivedPackets().
     mutable std::mutex receiveMutex;
-    std::map<uint32_t, RemoteSampleData> latestSamples;
+    std::map<uint32_t, RemoteRawPacket> latestPackets;
+
+    // Per-sender last sequence number for gap detection (receiver thread only)
+    std::map<uint32_t, uint32_t> lastSeqNums;
 };
 
 } // namespace network

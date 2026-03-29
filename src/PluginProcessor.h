@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../lib/audio/AudioSampleFifo.h"
+#include "../lib/audio/AudioSampleRingBuffer.h"
 #include "../lib/audio/BeatSyncBuffer.h"
 #include "../lib/events/SyncGlobals.h"
 #include "../lib/network/SampleBroadcaster.h"
@@ -13,6 +14,7 @@ namespace phu { namespace debug { class EditorLogger; } }
 #endif
 
 using phu::audio::AudioSampleFifo;
+using phu::audio::AudioSampleRingBuffer;
 using phu::audio::BeatSyncBuffer;
 using phu::events::GlobalsEventListener;
 using phu::network::SampleBroadcaster;
@@ -75,18 +77,7 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     bool isBroadcastEnabled() const { return m_broadcastEnabled.load(); }
     void setBroadcastEnabled(bool enabled);
 
-    /**
-     * Check whether a beat-boundary has been crossed since the last call and
-     * clear the flag atomically. Called from the editor timer to decide when
-     * to broadcast the filtered display buffer. Returns true once per beat
-     * interval; subsequent calls return false until the audio thread sets the
-     * flag again.
-     */
-    bool checkAndClearBroadcastReady() {
-        return m_broadcastReady.exchange(false, std::memory_order_acq_rel);
-    }
-
-    /** juce::Timer callback — sends broadcast on the message thread (~10 Hz). */
+    /** juce::Timer callback — drains raw sample ring buffer and sends packets (~30 Hz). */
     void timerCallback() override;
 
     // Sample receiving (independent from broadcasting)
@@ -146,14 +137,18 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     std::atomic<bool> m_broadcastEnabled{false};
     std::atomic<bool> m_receiveEnabled{true};
 
-    // Beat-driven broadcast: audio thread sets flag at quarter-beat boundaries
-    std::atomic<bool> m_broadcastReady{false};
-    double m_lastBroadcastPpq = 0.0;   // audio-thread only
-    double m_lastWriteWindowStart = -1.0; // audio-thread only: last cycle start written
-    static constexpr double BROADCAST_BEAT_INTERVAL = 0.25; // broadcast every 1/4 beat
+    // Raw sample ring buffer: audio thread writes mono samples + PPQ; message thread drains.
+    // Loopback-only — sized for ~370 ms to absorb timer hiccups without dropping samples.
+    AudioSampleRingBuffer m_rawBroadcastRing;
 
-    // Work buffer for headless broadcast (message-thread only)
-    std::vector<float> m_broadcastWorkBuf;
+    // Sequence number for outgoing RawSamplesPackets (message-thread only)
+    uint32_t m_broadcastSeqNum = 0;
+
+    // Work buffer for draining the ring buffer on the message thread
+    std::vector<float>  m_broadcastSampleBuf;
+    std::vector<double> m_broadcastPpqBuf;
+
+    double m_lastWriteWindowStart = -1.0; // audio-thread only: last cycle start written
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhuBeatSyncMultiScopeAudioProcessor)
 };
