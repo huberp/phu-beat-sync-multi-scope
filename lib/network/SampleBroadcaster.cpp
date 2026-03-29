@@ -73,10 +73,22 @@ bool SampleBroadcaster::broadcastSamples(const float* sampleData, int numBins,
     packet.bpm = bpm;
     packet.displayRangeBeats = displayRangeBeats;
 
-    // Copy float samples directly (capped at MAX_SAMPLE_BINS) and send variable-length packet
+    // Downsample to MAX_SAMPLE_BINS using stride sampling to preserve the bin-to-position
+    // coordinate mapping. A flat first-N copy would transmit only the first half of the
+    // sender's range (BeatSyncBuffer has 4096 bins, wire cap is 2048). The receiver
+    // reconstructs PPQ as: absolutePpq = senderWindowStart + (j / numBins) * senderRange.
+    // With stride = numBins / outputBins, output bin j comes from input bin j * stride,
+    // whose normalized position j * stride / numBins = j / outputBins — the same fraction
+    // the receiver will compute — so PPQ reconstruction is exact.
     int outputBins = (std::min)(numBins, MAX_SAMPLE_BINS);
     packet.numBins = static_cast<uint16_t>(outputBins);
-    std::memcpy(packet.samples, sampleData, sizeof(float) * static_cast<size_t>(outputBins));
+    if (numBins <= MAX_SAMPLE_BINS) {
+        std::memcpy(packet.samples, sampleData, sizeof(float) * static_cast<size_t>(outputBins));
+    } else {
+        const int stride = numBins / outputBins;
+        for (int j = 0; j < outputBins; ++j)
+            packet.samples[j] = sampleData[j * stride];
+    }
 
     // Send only the header + the bins actually used (variable-length)
     auto* addr = static_cast<sockaddr_in*>(multicastAddr);
