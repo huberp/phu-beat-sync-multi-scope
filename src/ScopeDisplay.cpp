@@ -18,8 +18,8 @@ void ScopeDisplay::setLocalData(const float* data, int numBins) {
 
 void ScopeDisplay::setRemoteData(
     const std::vector<SampleBroadcaster::RemoteSampleData>& remoteData) {
-    // Note: m_remoteData is intentionally not updated here — it was dead storage.
-    // All rendering uses m_remoteAccumBuffers which is populated below.
+    // Keep m_remoteData synchronized for metadata/inspection purposes.
+    m_remoteData = remoteData;
 
     const double receiverRange = m_displayRangeBeats > 0.0 ? m_displayRangeBeats : 1.0;
 
