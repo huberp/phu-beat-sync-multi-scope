@@ -242,14 +242,14 @@ void ScopeDisplay::computeMetrics() {
     const int  numRemotes = (int)m_remoteAccumBuffers.size();
     const bool doCancel   = m_showCancellation && !m_remoteAccumBuffers.empty();
 
-    // Cache remote bin pointers for fast inner-loop access
-    std::vector<const float*> remotePtrs;
-    std::vector<int>          remoteSizes;
-    remotePtrs.reserve(static_cast<size_t>(numRemotes));
-    remoteSizes.reserve(static_cast<size_t>(numRemotes));
+    // Reuse class-member scratch vectors to avoid per-frame heap allocation
+    m_metricRemotePtrs.clear();
+    m_metricRemoteSizes.clear();
+    m_metricRemotePtrs.reserve(static_cast<size_t>(numRemotes));
+    m_metricRemoteSizes.reserve(static_cast<size_t>(numRemotes));
     for (const auto& kv : m_remoteAccumBuffers) {
-        remotePtrs.push_back(kv.second.bins.data());
-        remoteSizes.push_back((int)kv.second.bins.size());
+        m_metricRemotePtrs.push_back(kv.second.bins.data());
+        m_metricRemoteSizes.push_back((int)kv.second.bins.size());
     }
 
     // ---- RMS per 1/16-beat slot: RMS of (local + all remotes sum) ----
@@ -262,8 +262,8 @@ void ScopeDisplay::computeMetrics() {
         const int wCount = wEnd - wStart;
         if (wCount <= 0) continue;
 
-        double sumSqLocal = 0.0;
-        double sumSqSum   = 0.0;
+        float sumSqLocal = 0.0f;
+        float sumSqSum   = 0.0f;
 
         for (int b = wStart; b < wEnd; ++b) {
             const int   lb = localBins > 0 ? b * localBins / REMOTE_ACCUM_BINS : 0;
@@ -273,19 +273,20 @@ void ScopeDisplay::computeMetrics() {
 
             float sumVal = lv;
             for (int ri = 0; ri < numRemotes; ++ri) {
-                const float rv = (b < remoteSizes[ri]) ? remotePtrs[ri][b] : 0.0f;
+                const float rv = (b < m_metricRemoteSizes[ri])
+                                     ? m_metricRemotePtrs[ri][b] : 0.0f;
                 sumVal += rv;
             }
             sumSqSum += sumVal * sumVal;
         }
 
-        m_rmsLocal[s] = std::sqrt((float)(sumSqLocal / wCount));
-        m_rmsSum[s]   = std::sqrt((float)(sumSqSum   / wCount));
+        m_rmsLocal[s] = std::sqrt(sumSqLocal / static_cast<float>(wCount));
+        m_rmsSum[s]   = std::sqrt(sumSqSum   / static_cast<float>(wCount));
     }
 
     // ---- Cancellation: fine-grained windows (~4ms each at 4-beat display) ----
     if (doCancel) {
-        std::vector<double> remSumSq(static_cast<size_t>(numRemotes), 0.0);
+        m_metricRemSumSq.assign(static_cast<size_t>(numRemotes), 0.0f);
 
         for (int s = 0; s < MAX_CANCEL_SLOTS; ++s) {
             const int wStart = s       * REMOTE_ACCUM_BINS / MAX_CANCEL_SLOTS;
@@ -293,9 +294,9 @@ void ScopeDisplay::computeMetrics() {
             const int wCount = wEnd - wStart;
             if (wCount <= 0) continue;
 
-            double sumSqLocal = 0.0;
-            double sumSqSum   = 0.0;
-            std::fill(remSumSq.begin(), remSumSq.end(), 0.0);
+            float sumSqLocal = 0.0f;
+            float sumSqSum   = 0.0f;
+            std::fill(m_metricRemSumSq.begin(), m_metricRemSumSq.end(), 0.0f);
 
             for (int b = wStart; b < wEnd; ++b) {
                 const int   lb = localBins > 0 ? b * localBins / REMOTE_ACCUM_BINS : 0;
@@ -305,29 +306,31 @@ void ScopeDisplay::computeMetrics() {
 
                 float sumVal = lv;
                 for (int ri = 0; ri < numRemotes; ++ri) {
-                    const float rv = (b < remoteSizes[ri]) ? remotePtrs[ri][b] : 0.0f;
-                    remSumSq[static_cast<size_t>(ri)] += rv * rv;
+                    const float rv = (b < m_metricRemoteSizes[ri])
+                                         ? m_metricRemotePtrs[ri][b] : 0.0f;
+                    m_metricRemSumSq[static_cast<size_t>(ri)] += rv * rv;
                     sumVal += rv;
                 }
                 sumSqSum += sumVal * sumVal;
             }
 
-            double sumIndividualRms = std::sqrt(sumSqLocal / wCount);
+            float sumIndividualRms = std::sqrt(sumSqLocal / static_cast<float>(wCount));
             for (int ri = 0; ri < numRemotes; ++ri)
-                sumIndividualRms += std::sqrt(remSumSq[static_cast<size_t>(ri)] / wCount);
+                sumIndividualRms += std::sqrt(
+                    m_metricRemSumSq[static_cast<size_t>(ri)] / static_cast<float>(wCount));
 
             // Noise floor at ~-100 dBFS. Was 0.01 to mask 8-bit quantization DC offset.
-            if (sumIndividualRms > 1e-4) {
-                const float rmsSum = std::sqrt((float)(sumSqSum / wCount));
+            if (sumIndividualRms > 1e-4f) {
+                const float rmsSum = std::sqrt(sumSqSum / static_cast<float>(wCount));
                 const float ci = juce::jlimit(
-                    0.0f, 1.0f, 1.0f - rmsSum / (float)sumIndividualRms);
+                    0.0f, 1.0f, 1.0f - rmsSum / sumIndividualRms);
 
                 // Level-weighted CI: cancellation is only meaningful when signal is present.
                 // Weight rises as sqrt(D / D_ref), clamped to 1 above D_ref = 0.1 (-20 dBFS).
                 // At the noise floor (~0.01) weight ≈ 0.32; at -20 dBFS weight = 1.0.
                 constexpr float D_REF = 0.1f;
                 const float levelWeight = std::sqrt(
-                    juce::jlimit(0.0f, 1.0f, (float)(sumIndividualRms / D_REF)));
+                    juce::jlimit(0.0f, 1.0f, sumIndividualRms / D_REF));
                 m_cancellationIndex[s] = ci * levelWeight;
             }
         }

@@ -118,6 +118,11 @@ class ScopeDisplay : public juce::Component {
     // Amplitude scale factor applied to Y-axis display [0.5, 4.0]
     float m_amplitudeScale = 1.0f;
 
+    // Reusable scratch vectors for computeMetrics() — allocated once, reused every frame
+    std::vector<const float*> m_metricRemotePtrs;
+    std::vector<int>          m_metricRemoteSizes;
+    std::vector<float>        m_metricRemSumSq;
+
     // Map raw sample value [-1, +1] to Y coordinate
     float sampleToY(float sample, float top, float height) const;
 
