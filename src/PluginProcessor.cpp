@@ -3,12 +3,6 @@
 #include "../lib/network/SampleBroadcaster.h"
 #include <cmath>
 
-// Compile-time guard: BeatSyncBuffer resolution must match SampleBroadcaster::SYNC_BINS
-// so that the receiver's accum buffer is 1:1 with the sender's source buffer.
-static_assert(PhuBeatSyncMultiScopeAudioProcessor::NUM_SYNC_BINS ==
-                  phu::network::SampleBroadcaster::SYNC_BINS,
-              "NUM_SYNC_BINS must equal SampleBroadcaster::SYNC_BINS");
-
 #ifndef NDEBUG
 #include "../lib/debug/EditorLogger.h"
 #endif
@@ -30,10 +24,10 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
     m_sampleBroadcaster.initialize();
 
     // Start processor-owned broadcast timer (30 Hz) so broadcasting continues
-    // even when the plugin editor is closed. 30 Hz matches the broadcaster's
-    // designed throttle interval (33 ms) and gives ~15 packets per beat at
-    // 120 BPM, keeping remote playhead positions fine-grained enough for the
-    // fresh-bins-only scatter-write to fill the display smoothly.
+    // even when the plugin editor is closed. The timer drains the raw sample
+    // ring buffer in full chunks of BROADCAST_CHUNK_SAMPLES, sending as many
+    // packets as are available per tick to keep the receiver current even if
+    // a timer tick was delayed.
     startTimerHz(30);
 }
 
@@ -187,51 +181,59 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
             const float monoIn = (ch0[i] + ch1[i]) * monoScale;
             m_inputSyncBuf.write(normPos, monoIn);
 
+            // Push every mono sample with its absolute PPQ position into the
+            // raw broadcast ring buffer. The message-thread timer drains this
+            // in full chunks and sends RawSamplesPackets to remote instances.
+            if (m_broadcastEnabled.load(std::memory_order_relaxed)) {
+                const double samplePpq = blockPpq + static_cast<double>(i) * ppqPerSample;
+                m_rawBroadcastRing.push(monoIn, samplePpq);
+            }
+
             normPos += normStep;
             if (normPos >= 1.0) normPos -= 1.0;
         }
 
         m_syncGlobals.setPpqEndOfBlock(blockPpq + numSamples * ppqPerSample);
-
-        // Beat-driven broadcast: signal when a quarter-beat boundary is crossed
-        double endPpq = blockPpq + numSamples * ppqPerSample;
-        if (m_broadcastEnabled.load(std::memory_order_relaxed)) {
-            double elapsed = endPpq - m_lastBroadcastPpq;
-            if (elapsed >= BROADCAST_BEAT_INTERVAL || elapsed < 0.0) {
-                m_broadcastReady.store(true, std::memory_order_relaxed);
-                m_lastBroadcastPpq = endPpq;
-            }
-        }
     }
 
     m_syncGlobals.finishRun(numSamples);
 }
 
 // ============================================================================
-// Processor Timer — headless broadcast
+// Processor Timer — raw sample broadcast
 // ============================================================================
 
 void PhuBeatSyncMultiScopeAudioProcessor::timerCallback() {
     if (!m_broadcastEnabled.load(std::memory_order_relaxed))
         return;
-    if (!checkAndClearBroadcastReady())
-        return;
 
-    const int numBins = m_inputSyncBuf.size();
-    if (numBins <= 0)
-        return;
+    const int chunkSize = phu::network::SampleBroadcaster::BROADCAST_CHUNK_SAMPLES;
 
-    m_broadcastWorkBuf.resize(static_cast<size_t>(numBins));
-    std::copy(m_inputSyncBuf.data(), m_inputSyncBuf.data() + numBins,
-              m_broadcastWorkBuf.begin());
+    // Ensure work buffers are large enough (allocated once, never reallocated)
+    if (static_cast<int>(m_broadcastSampleBuf.size()) < chunkSize) {
+        m_broadcastSampleBuf.resize(static_cast<size_t>(chunkSize));
+        m_broadcastPpqBuf.resize(static_cast<size_t>(chunkSize));
+    }
 
-    const double ppq = m_syncGlobals.getPpqEndOfBlock();
-    const double bpm = m_syncGlobals.getBPM();
-    const float displayRange = static_cast<float>(m_displayRangeBeats.load());
+    const double bpm         = m_syncGlobals.getBPM();
+    const float  displayRange = static_cast<float>(m_displayRangeBeats.load());
 
-    if (bpm > 0.0) {
-        m_sampleBroadcaster.broadcastSamples(
-            m_broadcastWorkBuf.data(), numBins, ppq, bpm, displayRange);
+    // Drain all available full chunks and send one packet per chunk.
+    // If the timer was delayed, multiple packets are sent in this tick.
+    // Partial chunks (< chunkSize) are left in the ring buffer for the next tick.
+    while (m_rawBroadcastRing.getNumAvailable() >= chunkSize) {
+        const int drained = m_rawBroadcastRing.drain(
+            m_broadcastSampleBuf.data(), m_broadcastPpqBuf.data(), chunkSize);
+
+        if (drained < chunkSize)
+            break; // Should not happen, but guard against partial drain
+
+        if (bpm > 0.0) {
+            m_sampleBroadcaster.broadcastRawSamples(
+                m_broadcastSampleBuf.data(), chunkSize,
+                m_broadcastPpqBuf[0], bpm, displayRange,
+                m_broadcastSeqNum++);
+        }
     }
 }
 

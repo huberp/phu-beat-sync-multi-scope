@@ -347,6 +347,10 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
         // --- Pass filtered data to the scope display ---
         scopeDisplay.setLocalData(m_displayWorkBuf.data(), static_cast<int>(m_displayWorkBuf.size()));
 
+        // Propagate sample rate to ScopeDisplay for per-sample PPQ reconstruction
+        if (sampleRate > 0.0)
+            scopeDisplay.setSampleRate(sampleRate);
+
     }
 
     // Update PPQ position for playhead
@@ -360,10 +364,10 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
     if (remoteDisplayToggle.getToggleState()) {
         // Use the persistent cache vector — reuses its capacity each frame,
         // avoiding a heap allocation per 60 Hz tick.
-        audioProcessor.getSampleBroadcaster().getReceivedSamples(m_remoteDataCache);
-        scopeDisplay.setRemoteData(m_remoteDataCache);
+        audioProcessor.getSampleBroadcaster().getReceivedPackets(m_remoteDataCache);
+        scopeDisplay.setRemoteRawData(m_remoteDataCache);
     } else {
-        scopeDisplay.setRemoteData({});
+        scopeDisplay.setRemoteRawData({});
     }
 
     // Repaint scope

@@ -30,6 +30,14 @@ namespace network {
  * Subclasses must implement:
  * - receiverThreadRun()  — the loop that reads from recvSocket
  * - onShutdown()         — optional cleanup hook (called during shutdown)
+ *
+ * LOCALHOST-ONLY ASSUMPTION:
+ * All plugin instances are assumed to run on the same machine (loopback interface).
+ * The loopback MTU on Linux and macOS is 65535 bytes, so packet size is not
+ * constrained by the Ethernet MTU (1500 bytes). Subclasses may therefore send
+ * large packets (e.g., ~6 KB for 1470 float samples) without fragmentation concerns.
+ * Do not use this infrastructure for cross-machine multicast without first adding
+ * MTU-aware packet splitting.
  */
 class MulticastBroadcasterBase {
   public:

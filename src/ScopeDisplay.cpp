@@ -18,12 +18,11 @@ void ScopeDisplay::setLocalData(const float* data, int numBins) {
     m_cancelOverlayDirty = true;
 }
 
-void ScopeDisplay::setRemoteData(
-    const std::vector<SampleBroadcaster::RemoteSampleData>& remoteData) {
-    // Keep m_remoteData synchronized for metadata/inspection purposes.
-    m_remoteData = remoteData;
+void ScopeDisplay::setRemoteRawData(
+    const std::vector<SampleBroadcaster::RemoteRawPacket>& remoteData) {
 
     const double receiverRange = m_displayRangeBeats > 0.0 ? m_displayRangeBeats : 1.0;
+    const double sampleRate    = m_sampleRate > 0.0 ? m_sampleRate : 44100.0;
 
     // Invalidate all accum buffers when the receiver's display range changes
     if (receiverRange != m_lastAccumReceiverRange) {
@@ -31,68 +30,68 @@ void ScopeDisplay::setRemoteData(
         m_lastAccumReceiverRange = receiverRange;
     }
 
-    // Scatter-write each incoming packet's bins into the receiver-space accum buffer.
-    //
-    // Two-layer freshness guard:
-    //   1. Sender-side: PluginProcessor clears its BeatSyncBuffer on cycle transition,
-    //      so silent bins are already zero in the packet — primary fix.
-    //   2. Receiver-side (this code): on a new sender cycle, clear the affected
-    //      receiver bins, then write only 0..playheadBin (bins the sender has swept
-    //      past in the current cycle) — defence-in-depth against in-flight stale packets.
-    for (const auto& remote : remoteData) {
-        const int numBins = static_cast<int>(remote.samples.size());
-        if (numBins == 0) continue;
+    for (const auto& pkt : remoteData) {
+        if (pkt.numSamples == 0) continue;
 
-        const double senderRange = remote.displayRangeBeats > 0.0f
-                                       ? static_cast<double>(remote.displayRangeBeats)
-                                       : 1.0;
-        const double senderWindowStart =
-            std::floor(remote.ppqPosition / senderRange) * senderRange;
+        auto& accum = m_remoteAccumBuffers[pkt.instanceID];
 
-        // How far into the current sender cycle is the playhead? [0, numBins)
-        const double normPlayhead =
-            std::fmod(remote.ppqPosition, senderRange) / senderRange;
-        const int freshBins = static_cast<int>(normPlayhead * numBins);
-
-        auto& accum = m_remoteAccumBuffers[remote.instanceID];
+        // Ensure display bins are allocated
         if (static_cast<int>(accum.bins.size()) != REMOTE_ACCUM_BINS)
             accum.bins.assign(static_cast<size_t>(REMOTE_ACCUM_BINS), 0.0f);
 
-        // Cycle transition: sender has entered a new display window.
-        // For short windows (<= 1 beat), clear aggressively to avoid previous-beat
-        // bleed. For longer windows, preserve accumulated history.
-        if (std::abs(senderWindowStart - accum.lastWindowStart) > 1e-9) {
-            if (senderRange >= receiverRange) {
-                // Sender covers full receiver range. Only hard-clear for short windows.
-                if (receiverRange <= 1.0 + 1e-9)
-                    std::fill(accum.bins.begin(), accum.bins.end(), 0.0f);
-            } else {
-                // Sender covers a sub-range — clear only the affected receiver bins.
-                const double normStart =
-                    std::fmod(senderWindowStart, receiverRange) / receiverRange;
-                const int binStart = static_cast<int>(normStart * REMOTE_ACCUM_BINS);
-                const int binCount =
-                    static_cast<int>((senderRange / receiverRange) * REMOTE_ACCUM_BINS);
-                for (int b = 0; b < binCount; ++b)
-                    accum.bins[static_cast<size_t>(
-                        (binStart + b) % REMOTE_ACCUM_BINS)] = 0.0f;
-            }
-            accum.lastWindowStart = senderWindowStart;
+        // Skip packets we have already processed (deduplication via sequence number).
+        // At 30 Hz send / 60 Hz read, the same packet may be returned twice by
+        // getReceivedPackets(). Duplicate processing would double-count RMS sums.
+        if (accum.hasSeq && pkt.sequenceNumber == accum.lastSeqNum)
+            continue;
+        accum.lastSeqNum = pkt.sequenceNumber;
+        accum.hasSeq     = true;
+
+        // PPQ advance per sample: derived from sender BPM and receiver sample rate
+        const double bpm = pkt.bpm > 0.0 ? pkt.bpm : 120.0;
+        const double ppqPerSample = bpm / (60.0 * sampleRate);
+
+        // Detect receiver-space cycle boundary from the first sample's PPQ.
+        // On a new cycle, clear all accum arrays so stale data from the previous
+        // cycle does not corrupt RMS/cancellation metrics.
+        const double firstPpq      = pkt.ppqOfFirstSample;
+        const double windowStart   = std::floor(firstPpq / receiverRange) * receiverRange;
+
+        if (std::abs(windowStart - accum.lastWindowStart) > 1e-9) {
+            std::fill(accum.bins.begin(), accum.bins.end(), 0.0f);
+            std::fill(std::begin(accum.rmsAccum),    std::end(accum.rmsAccum),    0.0f);
+            std::fill(std::begin(accum.rmsCount),    std::end(accum.rmsCount),    0);
+            std::fill(std::begin(accum.cancelAccum), std::end(accum.cancelAccum), 0.0f);
+            std::fill(std::begin(accum.cancelCount), std::end(accum.cancelCount), 0);
+            accum.lastWindowStart = windowStart;
         }
 
-        // Write only the freshly-swept portion of the sender's buffer.
-        // Bins ahead of the playhead are stale from the previous cycle — skip them.
-        for (int i = 0; i <= freshBins && i < numBins; ++i) {
-            const double absolutePpq =
-                senderWindowStart +
-                (static_cast<double>(i) / static_cast<double>(numBins)) * senderRange;
-
-            double normPos = std::fmod(absolutePpq, receiverRange) / receiverRange;
+        // Scatter-write each sample into the receiver's coordinate space
+        for (int i = 0; i < static_cast<int>(pkt.numSamples); ++i) {
+            const double ppq_i  = firstPpq + static_cast<double>(i) * ppqPerSample;
+            double normPos      = std::fmod(ppq_i, receiverRange) / receiverRange;
             if (normPos < 0.0) normPos += 1.0;
 
+            const float s = pkt.samples[i];
+
+            // Waveform display bin (last-write-wins)
             const int bin = static_cast<int>(normPos * REMOTE_ACCUM_BINS);
             if (bin >= 0 && bin < REMOTE_ACCUM_BINS)
-                accum.bins[static_cast<size_t>(bin)] = remote.samples[static_cast<size_t>(i)];
+                accum.bins[static_cast<size_t>(bin)] = s;
+
+            // RMS accumulation (1/16-beat slots)
+            const int rmsSlot = static_cast<int>(normPos * MAX_METRIC_SLOTS);
+            if (rmsSlot >= 0 && rmsSlot < MAX_METRIC_SLOTS) {
+                accum.rmsAccum[rmsSlot] += s * s;
+                accum.rmsCount[rmsSlot]++;
+            }
+
+            // Cancellation accumulation (fine-grained slots)
+            const int cancelSlot = static_cast<int>(normPos * MAX_CANCEL_SLOTS);
+            if (cancelSlot >= 0 && cancelSlot < MAX_CANCEL_SLOTS) {
+                accum.cancelAccum[cancelSlot] += s * s;
+                accum.cancelCount[cancelSlot]++;
+            }
         }
     }
 
@@ -302,7 +301,7 @@ void ScopeDisplay::computeMetrics() {
     const int  numRemotes = (int)m_remoteAccumBuffers.size();
     const bool doCancel   = m_showCancellation && !m_remoteAccumBuffers.empty();
 
-    // Reuse class-member scratch vectors to avoid per-frame heap allocation
+    // Collect pointers to remote display bins (used for cancellation numerator)
     m_metricRemotePtrs.clear();
     m_metricRemoteSizes.clear();
     m_metricRemotePtrs.reserve(static_cast<size_t>(numRemotes));
@@ -312,9 +311,10 @@ void ScopeDisplay::computeMetrics() {
         m_metricRemoteSizes.push_back((int)kv.second.bins.size());
     }
 
-    // ---- RMS per 1/16-beat slot: RMS of (local + all remotes sum) ----
-    // Both remote accum and local are at REMOTE_ACCUM_BINS == NUM_SYNC_BINS (4096) —
-    // no index remap needed; lb == b always.
+    // ---- RMS per 1/16-beat slot ----
+    // rmsLocal[s]  = sqrt( mean(local_bins²) ) over the slot window
+    // rmsRemote[s] = sqrt( rmsAccum[id][s] / rmsCount[id][s] ) per remote id
+    // rmsSum[s]    = rmsLocal[s] + Σ_id rmsRemote[id][s]   (sum of individual RMSes)
     for (int s = 0; s < numRmsSlots; ++s) {
         const int wStart = s       * REMOTE_ACCUM_BINS / numRmsSlots;
         const int wEnd   = (s + 1) * REMOTE_ACCUM_BINS / numRmsSlots;
@@ -322,74 +322,74 @@ void ScopeDisplay::computeMetrics() {
         if (wCount <= 0) continue;
 
         float sumSqLocal = 0.0f;
-        float sumSqSum   = 0.0f;
-
         for (int b = wStart; b < wEnd; ++b) {
             const int   lb = localBins > 0 ? b * localBins / REMOTE_ACCUM_BINS : 0;
             const float lv = (localBins > 0 && lb < localBins)
                                  ? m_localData[static_cast<size_t>(lb)] : 0.0f;
             sumSqLocal += lv * lv;
-
-            float sumVal = lv;
-            for (int ri = 0; ri < numRemotes; ++ri) {
-                const float rv = (b < m_metricRemoteSizes[ri])
-                                     ? m_metricRemotePtrs[ri][b] : 0.0f;
-                sumVal += rv;
-            }
-            sumSqSum += sumVal * sumVal;
         }
-
         m_rmsLocal[s] = std::sqrt(sumSqLocal / static_cast<float>(wCount));
-        m_rmsSum[s]   = std::sqrt(sumSqSum   / static_cast<float>(wCount));
+
+        float rmsSum = m_rmsLocal[s];
+        for (const auto& kv : m_remoteAccumBuffers) {
+            const float* ra = kv.second.rmsAccum;
+            const int*   rc = kv.second.rmsCount;
+            rmsSum += (rc[s] > 0) ? std::sqrt(ra[s] / static_cast<float>(rc[s])) : 0.0f;
+        }
+        m_rmsSum[s] = rmsSum;
     }
 
     // ---- Cancellation: fine-grained windows (~4ms each at 4-beat display) ----
+    // Denominator D[s] = rmsLocal[s] + Σ_id sqrt(cancelAccum[id][s] / cancelCount[id][s])
+    // Numerator   N[s] = RMS of (local_bins + Σ_id remote_bins) over the cancel slot window
+    // CI[s] = 1 - N[s] / D[s], level-weighted
     if (doCancel) {
-        m_metricRemSumSq.assign(static_cast<size_t>(numRemotes), 0.0f);
-
         for (int s = 0; s < MAX_CANCEL_SLOTS; ++s) {
             const int wStart = s       * REMOTE_ACCUM_BINS / MAX_CANCEL_SLOTS;
             const int wEnd   = (s + 1) * REMOTE_ACCUM_BINS / MAX_CANCEL_SLOTS;
             const int wCount = wEnd - wStart;
             if (wCount <= 0) continue;
 
+            // Denominator: sum of individual per-slot RMSes from dedicated accum
             float sumSqLocal = 0.0f;
-            float sumSqSum   = 0.0f;
-            std::fill(m_metricRemSumSq.begin(), m_metricRemSumSq.end(), 0.0f);
-
             for (int b = wStart; b < wEnd; ++b) {
                 const int   lb = localBins > 0 ? b * localBins / REMOTE_ACCUM_BINS : 0;
                 const float lv = (localBins > 0 && lb < localBins)
                                      ? m_localData[static_cast<size_t>(lb)] : 0.0f;
                 sumSqLocal += lv * lv;
+            }
+            float D = std::sqrt(sumSqLocal / static_cast<float>(wCount));
+            for (const auto& kv : m_remoteAccumBuffers) {
+                const float* ca = kv.second.cancelAccum;
+                const int*   cc = kv.second.cancelCount;
+                D += (cc[s] > 0) ? std::sqrt(ca[s] / static_cast<float>(cc[s])) : 0.0f;
+            }
 
+            // Numerator: RMS of summed waveform over the cancel slot window
+            float sumSqSum = 0.0f;
+            for (int b = wStart; b < wEnd; ++b) {
+                const int   lb = localBins > 0 ? b * localBins / REMOTE_ACCUM_BINS : 0;
+                const float lv = (localBins > 0 && lb < localBins)
+                                     ? m_localData[static_cast<size_t>(lb)] : 0.0f;
                 float sumVal = lv;
                 for (int ri = 0; ri < numRemotes; ++ri) {
                     const float rv = (b < m_metricRemoteSizes[ri])
                                          ? m_metricRemotePtrs[ri][b] : 0.0f;
-                    m_metricRemSumSq[static_cast<size_t>(ri)] += rv * rv;
                     sumVal += rv;
                 }
                 sumSqSum += sumVal * sumVal;
             }
+            const float N = std::sqrt(sumSqSum / static_cast<float>(wCount));
 
-            float sumIndividualRms = std::sqrt(sumSqLocal / static_cast<float>(wCount));
-            for (int ri = 0; ri < numRemotes; ++ri)
-                sumIndividualRms += std::sqrt(
-                    m_metricRemSumSq[static_cast<size_t>(ri)] / static_cast<float>(wCount));
-
-            // Noise floor at ~-100 dBFS. Was 0.01 to mask 8-bit quantization DC offset.
-            if (sumIndividualRms > 1e-4f) {
-                const float rmsSum = std::sqrt(sumSqSum / static_cast<float>(wCount));
-                const float ci = juce::jlimit(
-                    0.0f, 1.0f, 1.0f - rmsSum / sumIndividualRms);
+            // Noise floor at ~-100 dBFS
+            if (D > 1e-4f) {
+                const float ci = juce::jlimit(0.0f, 1.0f, 1.0f - N / D);
 
                 // Level-weighted CI: cancellation is only meaningful when signal is present.
                 // Weight rises as sqrt(D / D_ref), clamped to 1 above D_ref = 0.1 (-20 dBFS).
-                // At the noise floor (~0.01) weight ≈ 0.32; at -20 dBFS weight = 1.0.
                 constexpr float D_REF = 0.1f;
                 const float levelWeight = std::sqrt(
-                    juce::jlimit(0.0f, 1.0f, sumIndividualRms / D_REF));
+                    juce::jlimit(0.0f, 1.0f, D / D_REF));
                 m_cancellationIndex[s] = ci * levelWeight;
             }
         }
