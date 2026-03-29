@@ -161,18 +161,27 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
             m_lastWriteWindowStart = endWindowStart;
         }
 
+        // Hoist channel count and raw pointers out of the per-sample loop.
+        // Using read pointers allows the compiler to auto-vectorize the mono mix,
+        // and avoids bounds-checked getSample() overhead per sample.
+        const int activeCh = juce::jmin(numChannels, 2);
+        const float* ch0 = buffer.getReadPointer(0);
+        const float* ch1 = (activeCh > 1) ? buffer.getReadPointer(1) : ch0;
+        const float monoScale = (activeCh == 1) ? 1.0f : 0.5f;
+
+        // Replace std::fmod per sample with a linear normalized-position increment.
+        // Start at the block's normalized position and advance by normStep each sample,
+        // wrapping with a single branch — eliminates N libm fmod calls per block.
+        const double normStep = ppqPerSample / displayRange;
+        double normPos = std::fmod(blockPpq, displayRange) / displayRange;
+        if (normPos < 0.0) normPos += 1.0;
+
         for (int i = 0; i < numSamples; ++i) {
-            double ppq_i = blockPpq + i * ppqPerSample;
-            double normPos = std::fmod(ppq_i, displayRange) / displayRange;
-            if (normPos < 0.0) normPos += 1.0;
-
-            // Raw mono mix (no dB conversion — display as-is)
-            float monoIn = 0.0f;
-            for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch)
-                monoIn += buffer.getSample(ch, i);
-            monoIn /= static_cast<float>(juce::jmin(numChannels, 2));
-
+            const float monoIn = (ch0[i] + ch1[i]) * monoScale;
             m_inputSyncBuf.write(normPos, monoIn);
+
+            normPos += normStep;
+            if (normPos >= 1.0) normPos -= 1.0;
         }
 
         m_syncGlobals.setPpqEndOfBlock(blockPpq + numSamples * ppqPerSample);
