@@ -31,15 +31,19 @@ class AudioSampleRingBuffer {
 
     /**
      * Push a single mono sample with its PPQ position (audio thread).
-     * If the buffer is full, the sample is silently dropped.
+     * Returns true on success, false if the buffer is full and the sample was dropped.
+     * In debug builds a message is printed to the JUCE logger on the first drop.
      */
-    void push(float mono, double ppq) {
+    bool push(float mono, double ppq) {
         const auto scope = fifo.write(1);
         if (scope.blockSize1 > 0) {
             samples[static_cast<size_t>(scope.startIndex1)] = mono;
             ppqs[static_cast<size_t>(scope.startIndex1)]    = ppq;
+            return true;
         }
-        // blockSize2 is always 0 for single-element writes
+        // blockSize1 == 0 means the ring is full — sample dropped
+        DBG("AudioSampleRingBuffer: buffer full, sample dropped (ppq=" << ppq << ")");
+        return false;
     }
 
     /**
