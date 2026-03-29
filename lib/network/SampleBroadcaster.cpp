@@ -1,7 +1,6 @@
 #include "SampleBroadcaster.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstring>
 
 namespace phu {
@@ -24,7 +23,10 @@ namespace network {
 
 // Protocol magic number: "SMPL" in ASCII
 static constexpr uint32_t PROTOCOL_MAGIC = 0x534D504C;
-static constexpr uint32_t PROTOCOL_VERSION = 1;
+
+// Byte offset of the samples array within SamplePacket (fixed header size)
+static constexpr int kSamplePacketHeaderSize =
+    static_cast<int>(offsetof(SampleBroadcaster::SamplePacket, samples));
 
 // ============================================================================
 // Construction
@@ -71,15 +73,16 @@ bool SampleBroadcaster::broadcastSamples(const float* sampleData, int numBins,
     packet.bpm = bpm;
     packet.displayRangeBeats = displayRangeBeats;
 
-    // Compress samples (downsample and dB-quantize)
+    // Copy float samples directly (capped at MAX_SAMPLE_BINS) and send variable-length packet
     int outputBins = (std::min)(numBins, MAX_SAMPLE_BINS);
     packet.numBins = static_cast<uint16_t>(outputBins);
-    compressSamples(sampleData, numBins, packet.samples, outputBins);
+    std::memcpy(packet.samples, sampleData, sizeof(float) * static_cast<size_t>(outputBins));
 
-    // Send packet
+    // Send only the header + the bins actually used (variable-length)
     auto* addr = static_cast<sockaddr_in*>(multicastAddr);
+    const int payloadSize = kSamplePacketHeaderSize + static_cast<int>(sizeof(float)) * outputBins;
     int bytesSent =
-        sendto(sendSocket, reinterpret_cast<const char*>(&packet), sizeof(packet), 0,
+        sendto(sendSocket, reinterpret_cast<const char*>(&packet), payloadSize, 0,
                reinterpret_cast<struct sockaddr*>(addr), sizeof(sockaddr_in));
 
     return bytesSent > 0;
@@ -127,7 +130,7 @@ void SampleBroadcaster::receiverThreadRun() {
         int bytesReceived =
             recvfrom(recvSocket, reinterpret_cast<char*>(&packet), sizeof(packet), 0, nullptr, nullptr);
 
-        if (bytesReceived < static_cast<int>(sizeof(SamplePacket) - MAX_SAMPLE_BINS)) {
+        if (bytesReceived < kSamplePacketHeaderSize) {
             // Not enough data for a valid header — timeout or truncated packet
             continue;
         }
@@ -137,79 +140,39 @@ void SampleBroadcaster::receiverThreadRun() {
             continue; // Not our protocol
         }
 
+        // Reject packets from incompatible protocol versions
+        if (packet.version != PROTOCOL_VERSION) {
+            continue;
+        }
+
         // Ignore our own broadcasts
         if (packet.instanceID == instanceID) {
             continue;
         }
 
-        // Validate bin count
+        // Validate bin count and that we received enough bytes for the declared bins
         if (packet.numBins == 0 || packet.numBins > MAX_SAMPLE_BINS) {
             continue;
         }
+        const int expectedSize = kSamplePacketHeaderSize + static_cast<int>(sizeof(float)) * packet.numBins;
+        if (bytesReceived < expectedSize) {
+            continue;
+        }
 
-        // Decompress and store in map
+        // Copy float samples directly and store in map
         RemoteSampleData data;
-        data.instanceID = packet.instanceID;
-        data.timestamp = getCurrentTimeMs(); // Use local time for staleness check
-        data.ppqPosition = packet.ppqPosition;
-        data.bpm = packet.bpm;
+        data.instanceID        = packet.instanceID;
+        data.timestamp         = getCurrentTimeMs(); // Use local time for staleness check
+        data.ppqPosition       = packet.ppqPosition;
+        data.bpm               = packet.bpm;
         data.displayRangeBeats = packet.displayRangeBeats;
-        decompressSamples(packet.samples, packet.numBins, data.samples);
+        data.samples.resize(packet.numBins);
+        std::memcpy(data.samples.data(), packet.samples, sizeof(float) * packet.numBins);
 
         {
             std::lock_guard<std::mutex> lock(receiveMutex);
             latestSamples[packet.instanceID] = std::move(data);
         }
-    }
-}
-
-// ============================================================================
-// Sample Compression (linear 8-bit quantization)
-// ============================================================================
-
-void SampleBroadcaster::compressSamples(const float* input, int inputBins,
-                                        uint8_t* output, int outputBins) {
-    // Quantize linear samples [-1, +1] to 8-bit [0, 255]
-    // 0 → -1.0, 128 → 0.0, 255 → +1.0
-    auto quantize = [](float sample) -> uint8_t {
-        float normalized = (sample + 1.0f) * 0.5f; // [-1,+1] → [0,1]
-        normalized = (std::max)(0.0f, (std::min)(1.0f, normalized));
-        return static_cast<uint8_t>(normalized * 255.0f);
-    };
-
-    if (inputBins <= outputBins) {
-        for (int i = 0; i < inputBins; ++i)
-            output[i] = quantize(input[i]);
-        // Fill remaining bins with midpoint (silence = 0.0)
-        for (int i = inputBins; i < outputBins; ++i)
-            output[i] = 128;
-    } else {
-        // Downsample: pick sample with largest absolute value in each range
-        float binRatio = static_cast<float>(inputBins) / static_cast<float>(outputBins);
-        for (int i = 0; i < outputBins; ++i) {
-            float start = static_cast<float>(i) * binRatio;
-            float end = static_cast<float>(i + 1) * binRatio;
-            int startBin = static_cast<int>(start);
-            int endBin = (std::min)(static_cast<int>(std::ceil(end)), inputBins);
-
-            float peakSample = 0.0f;
-            for (int j = startBin; j < endBin; ++j) {
-                if (std::abs(input[j]) > std::abs(peakSample))
-                    peakSample = input[j];
-            }
-            output[i] = quantize(peakSample);
-        }
-    }
-}
-
-void SampleBroadcaster::decompressSamples(const uint8_t* input, int numBins,
-                                          std::vector<float>& output) {
-    // Dequantize 8-bit [0, 255] back to linear [-1, +1]
-    output.resize(static_cast<size_t>(numBins));
-
-    for (int i = 0; i < numBins; ++i) {
-        float normalized = static_cast<float>(input[i]) / 255.0f; // [0, 1]
-        output[static_cast<size_t>(i)] = normalized * 2.0f - 1.0f; // [-1, +1]
     }
 }
 

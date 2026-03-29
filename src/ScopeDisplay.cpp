@@ -252,6 +252,9 @@ void ScopeDisplay::computeMetrics() {
     }
 
     // ---- RMS per 1/16-beat slot: RMS of (local + all remotes sum) ----
+    // Remote accum is at REMOTE_ACCUM_BINS (2048), local is at NUM_SYNC_BINS (4096).
+    // Every other local bin is sampled — no peak-picking asymmetry since the wire
+    // encoding is now lossless float.
     for (int s = 0; s < numRmsSlots; ++s) {
         const int wStart = s       * REMOTE_ACCUM_BINS / numRmsSlots;
         const int wEnd   = (s + 1) * REMOTE_ACCUM_BINS / numRmsSlots;
@@ -312,8 +315,8 @@ void ScopeDisplay::computeMetrics() {
             for (int ri = 0; ri < numRemotes; ++ri)
                 sumIndividualRms += std::sqrt(remSumSq[static_cast<size_t>(ri)] / wCount);
 
-            // Noise floor at -40 dBFS: prevents false cancellation from 8-bit DC offset (~0.004)
-            if (sumIndividualRms > 0.01) {
+            // Noise floor at ~-100 dBFS. Was 0.01 to mask 8-bit quantization DC offset.
+            if (sumIndividualRms > 1e-4) {
                 const float rmsSum = std::sqrt((float)(sumSqSum / wCount));
                 const float ci = juce::jlimit(
                     0.0f, 1.0f, 1.0f - rmsSum / (float)sumIndividualRms);

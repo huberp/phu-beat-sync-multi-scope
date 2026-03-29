@@ -20,10 +20,10 @@ namespace network {
  * so receivers can align their display to the same musical position.
  *
  * Architecture:
- * - Sender: called from UI timer thread, compresses BeatSyncBuffer
- *   contents to 8-bit quantization and multicasts via UDP with PPQ info.
- * - Receiver: dedicated background thread receives packets, decompresses,
- *   and stores the latest sample data per remote instance in a mutex-protected map.
+ * - Sender: called from UI timer thread, copies float BeatSyncBuffer
+ *   contents and multicasts via variable-length UDP packets with PPQ info.
+ * - Receiver: dedicated background thread receives packets and stores
+ *   the latest sample data per remote instance in a mutex-protected map.
  * - Reader: UI thread calls getReceivedSamples() to get a snapshot of all
  *   currently active remote instances' waveform data.
  *
@@ -41,7 +41,10 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     static constexpr int MULTICAST_PORT = 49423;
 
     /** Maximum sample bins to transmit per packet. */
-    static constexpr int MAX_SAMPLE_BINS = 1024;
+    static constexpr int MAX_SAMPLE_BINS = 2048;
+
+    /** Protocol version — bumped when wire format changes. */
+    static constexpr uint32_t PROTOCOL_VERSION = 2;
 
     /** Time in milliseconds after which a remote instance is considered stale. */
     static constexpr int64_t STALE_TIMEOUT_MS = 3000;
@@ -50,14 +53,14 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     #pragma pack(push, 1)
     struct SamplePacket {
         uint32_t magic;                    // Protocol magic: 0x534D504C ("SMPL")
-        uint32_t version;                  // Protocol version: 1
+        uint32_t version;                  // Protocol version: 2
         uint32_t instanceID;               // Unique instance identifier
         uint64_t timestamp;                // Timestamp in milliseconds
         double ppqPosition;                // PPQ position reference for beat sync
         double bpm;                        // Current BPM for receiver display sync
         float displayRangeBeats;           // Musical range this buffer covers
         uint16_t numBins;                  // Number of sample bins (up to MAX_SAMPLE_BINS)
-        uint8_t samples[MAX_SAMPLE_BINS];  // 8-bit quantized waveform data (0-255)
+        float    samples[MAX_SAMPLE_BINS]; // Float waveform data [-1, +1]
     };
     #pragma pack(pop)
 
@@ -95,7 +98,7 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
 
     /**
      * Broadcast beat-synced sample data to all instances on the multicast group.
-     * Sample values are compressed to 8-bit quantization before sending.
+     * Sample values are sent as raw floats in a variable-length packet.
      *
      * @param sampleData   BeatSyncBuffer data array (linear [-1, +1])
      * @param numBins      Number of bins in the sample data array
@@ -137,16 +140,6 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     // The receiver thread writes, the UI thread reads via getReceivedSamples().
     mutable std::mutex receiveMutex;
     std::map<uint32_t, RemoteSampleData> latestSamples;
-
-    /**
-     * Compress linear sample values [-1, +1] to 8-bit quantization [0, 255].
-     */
-    void compressSamples(const float* input, int inputBins, uint8_t* output, int outputBins);
-
-    /**
-     * Decompress 8-bit quantized values back to linear sample values [-1, +1].
-     */
-    void decompressSamples(const uint8_t* input, int numBins, std::vector<float>& output);
 };
 
 } // namespace network
