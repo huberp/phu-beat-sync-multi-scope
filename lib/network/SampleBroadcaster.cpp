@@ -94,6 +94,12 @@ bool SampleBroadcaster::broadcastSamples(const float* sampleData, int numBins,
 
 std::vector<SampleBroadcaster::RemoteSampleData> SampleBroadcaster::getReceivedSamples() {
     std::vector<RemoteSampleData> results;
+    getReceivedSamples(results);
+    return results;
+}
+
+void SampleBroadcaster::getReceivedSamples(std::vector<RemoteSampleData>& out) {
+    out.clear();
     int64_t now = getCurrentTimeMs();
 
     std::lock_guard<std::mutex> lock(receiveMutex);
@@ -104,12 +110,10 @@ std::vector<SampleBroadcaster::RemoteSampleData> SampleBroadcaster::getReceivedS
         if (now - it->second.timestamp > STALE_TIMEOUT_MS) {
             it = latestSamples.erase(it); // Prune stale entry
         } else {
-            results.push_back(it->second);
+            out.push_back(it->second);
             ++it;
         }
     }
-
-    return results;
 }
 
 int SampleBroadcaster::getNumRemoteInstances() const {

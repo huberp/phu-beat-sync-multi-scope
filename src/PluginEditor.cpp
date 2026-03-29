@@ -358,8 +358,10 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
 
     // Get remote data if enabled (network receive on UI thread, per requirement)
     if (remoteDisplayToggle.getToggleState()) {
-        auto remoteSamples = audioProcessor.getSampleBroadcaster().getReceivedSamples();
-        scopeDisplay.setRemoteData(remoteSamples);
+        // Use the persistent cache vector — reuses its capacity each frame,
+        // avoiding a heap allocation per 60 Hz tick.
+        audioProcessor.getSampleBroadcaster().getReceivedSamples(m_remoteDataCache);
+        scopeDisplay.setRemoteData(m_remoteDataCache);
     } else {
         scopeDisplay.setRemoteData({});
     }
