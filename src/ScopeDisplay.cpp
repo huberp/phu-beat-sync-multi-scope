@@ -76,7 +76,9 @@ void ScopeDisplay::setRemoteRawData(
         const double windowStart   = std::floor(firstPpq / receiverRange) * receiverRange;
 
         if (std::abs(windowStart - accum.lastWindowStart) > 1e-9) {
-            std::fill(accum.bins.begin(), accum.bins.end(), 0.0f);
+            // Do NOT clear display bins — they use last-write-wins semantics
+            // and will be naturally overwritten as new packets arrive.
+            // Only clear the additive RMS/cancellation metric accumulators.
             std::fill(std::begin(accum.rmsAccum),    std::end(accum.rmsAccum),    0.0f);
             std::fill(std::begin(accum.rmsCount),    std::end(accum.rmsCount),    0);
             std::fill(std::begin(accum.cancelAccum), std::end(accum.cancelAccum), 0.0f);
@@ -315,9 +317,8 @@ void ScopeDisplay::drawWaveform(juce::Graphics& g, juce::Rectangle<float> area,
             const float yMax = sampleToY(maxV, area.getY(), area.getHeight()); // larger amp = smaller y
             const float yMin = sampleToY(minV, area.getY(), area.getHeight());
 
-            // Start a new subpath for each vertical min/max stroke so columns
-            // are not connected across X by diagonal segments.
-            path.startNewSubPath(x, yMax);
+            if (!started) { path.startNewSubPath(x, yMax); started = true; }
+            else            path.lineTo(x, yMax);
             path.lineTo(x, yMin);
         }
     }
