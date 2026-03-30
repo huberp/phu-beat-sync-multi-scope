@@ -19,6 +19,11 @@ static int64_t getProcessorTimeMs() {
         steady_clock::now().time_since_epoch()).count();
 }
 
+// Plugin-family identifier broadcast in every CTRL packet.
+// Receivers can use this to filter out instances from other plugin families.
+static constexpr char     PLUGIN_TYPE[]    = "phu-beat-sync";
+static constexpr uint32_t PLUGIN_VERSION   = 1;
+
 PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
     : AudioProcessor(BusesProperties()
                          .withInput("Input", juce::AudioChannelSet::stereo(), true)
@@ -134,7 +139,8 @@ void PhuBeatSyncMultiScopeAudioProcessor::prepareToPlay(double sampleRate, int s
         static_cast<float>(m_syncGlobals.getBPM()),
         sampleRate,
         static_cast<uint32_t>(samplesPerBlock),
-        m_colourRGBA);
+        m_colourRGBA,
+        PLUGIN_TYPE, PLUGIN_VERSION);
 
     // Reset heartbeat timer so we don't send a redundant Announce too soon
     m_lastCtrlHeartbeatMs = getProcessorTimeMs();
@@ -154,7 +160,8 @@ void PhuBeatSyncMultiScopeAudioProcessor::releaseResources() {
         static_cast<float>(m_syncGlobals.getBPM()),
         m_currentSampleRate,
         static_cast<uint32_t>(m_currentMaxBufSize),
-        m_colourRGBA);
+        m_colourRGBA,
+        PLUGIN_TYPE, PLUGIN_VERSION);
 }
 
 void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
@@ -252,7 +259,8 @@ void PhuBeatSyncMultiScopeAudioProcessor::timerCallback() {
                 static_cast<float>(m_syncGlobals.getBPM()),
                 m_currentSampleRate,
                 static_cast<uint32_t>(m_currentMaxBufSize),
-                m_colourRGBA);
+                m_colourRGBA,
+                PLUGIN_TYPE, PLUGIN_VERSION);
             m_lastCtrlHeartbeatMs = nowMs;
         }
     }
@@ -303,7 +311,8 @@ void PhuBeatSyncMultiScopeAudioProcessor::setDisplayRangeBeats(double beats) {
         static_cast<float>(m_syncGlobals.getBPM()),
         m_currentSampleRate,
         static_cast<uint32_t>(m_currentMaxBufSize),
-        m_colourRGBA);
+        m_colourRGBA,
+        PLUGIN_TYPE, PLUGIN_VERSION);
 }
 
 void PhuBeatSyncMultiScopeAudioProcessor::setBroadcastEnabled(bool enabled) {
@@ -326,7 +335,8 @@ void PhuBeatSyncMultiScopeAudioProcessor::setChannelLabel(const juce::String& la
         static_cast<float>(m_syncGlobals.getBPM()),
         m_currentSampleRate,
         static_cast<uint32_t>(m_currentMaxBufSize),
-        m_colourRGBA);
+        m_colourRGBA,
+        PLUGIN_TYPE, PLUGIN_VERSION);
 }
 
 juce::String PhuBeatSyncMultiScopeAudioProcessor::getChannelLabel() const {
@@ -346,7 +356,8 @@ void PhuBeatSyncMultiScopeAudioProcessor::setInstanceColour(juce::Colour colour)
         static_cast<float>(m_syncGlobals.getBPM()),
         m_currentSampleRate,
         static_cast<uint32_t>(m_currentMaxBufSize),
-        m_colourRGBA);
+        m_colourRGBA,
+        PLUGIN_TYPE, PLUGIN_VERSION);
 }
 
 juce::Colour PhuBeatSyncMultiScopeAudioProcessor::getInstanceColour() const {

@@ -50,7 +50,8 @@ void CtrlBroadcaster::onShutdown() {
 bool CtrlBroadcaster::sendCtrl(CtrlEventType eventType, const char* label,
                                 float displayRangeBeats, float bpm,
                                 double sampleRate, uint32_t maxBufferSize,
-                                const uint8_t colourRGBA[4]) {
+                                const uint8_t colourRGBA[4],
+                                const char* pluginType, uint32_t pluginVersion) {
     if (!networkInitialized || sendSocket == INVALID_SOCKET_VALUE)
         return false;
 
@@ -71,6 +72,11 @@ bool CtrlBroadcaster::sendCtrl(CtrlEventType eventType, const char* label,
     }
     if (colourRGBA != nullptr)
         std::memcpy(packet.colourRGBA, colourRGBA, 4);
+    if (pluginType != nullptr) {
+        std::strncpy(packet.pluginType, pluginType, 15);
+        packet.pluginType[15] = '\0';
+    }
+    packet.pluginVersion = pluginVersion;
 
     auto* addr = static_cast<sockaddr_in*>(multicastAddr);
     int bytesSent =
@@ -155,6 +161,9 @@ void CtrlBroadcaster::receiverThreadRun() {
             std::memcpy(info.channelLabel, packet.channelLabel, 32);
             info.channelLabel[31]  = '\0'; // ensure null-terminated
             std::memcpy(info.colourRGBA, packet.colourRGBA, 4);
+            std::memcpy(info.pluginType, packet.pluginType, 16);
+            info.pluginType[15]    = '\0'; // ensure null-terminated
+            info.pluginVersion     = packet.pluginVersion;
 
 #ifndef NDEBUG
             std::fprintf(stderr,
