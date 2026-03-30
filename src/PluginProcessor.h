@@ -166,8 +166,14 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     int64_t m_lastCtrlHeartbeatMs = 0;
 
     // Raw sample ring buffer: audio thread writes mono samples + PPQ; message thread drains.
-    // Loopback-only — sized for ~370 ms to absorb timer hiccups without dropping samples.
+    // Loopback-only — sized dynamically in prepareToPlay() to absorb timer hiccups.
     AudioSampleRingBuffer m_rawBroadcastRing;
+
+    // Runtime broadcast chunk size (samples per packet), computed in prepareToPlay()
+    // from the DAW sample rate so that each packet covers ~33 ms regardless of rate.
+    // Default of 1470 is safe at 44.1 kHz and ensures timerCallback() works even
+    // before prepareToPlay() is called.
+    int m_broadcastChunkSize = 1470;
 
     // Sequence number for outgoing RawSamplesPackets (message-thread only)
     uint32_t m_broadcastSeqNum = 0;

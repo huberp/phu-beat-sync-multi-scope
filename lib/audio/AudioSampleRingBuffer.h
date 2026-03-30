@@ -1,7 +1,7 @@
 #pragma once
 
-#include <array>
 #include <cstring>
+#include <vector>
 #include <juce_core/juce_core.h>
 
 namespace phu {
@@ -21,13 +21,19 @@ namespace audio {
  *   - push() must be called from exactly one thread (the audio thread).
  *   - drain() must be called from exactly one other thread (the message thread).
  *   - getNumAvailable() is safe to call from either thread.
+ *   - resize() must NOT be called while push() or drain() may be running concurrently.
  */
 class AudioSampleRingBuffer {
   public:
-    /** Ring buffer capacity in samples. Sized for ~370 ms at 44.1 kHz. */
-    static constexpr int CAPACITY = 16384;
-
-    AudioSampleRingBuffer() : fifo(CAPACITY) {}
+    /**
+     * Construct a ring buffer with the given capacity.
+     * @param capacity  Number of samples the ring can hold.
+     *                  Defaults to 16384 (~370 ms at 44.1 kHz) for backward compatibility.
+     */
+    explicit AudioSampleRingBuffer(int capacity = 16384)
+        : fifo(capacity),
+          samples(static_cast<size_t>(capacity), 0.0f),
+          ppqs(static_cast<size_t>(capacity), 0.0) {}
 
     /**
      * Push a single mono sample with its PPQ position (audio thread).
@@ -91,10 +97,22 @@ class AudioSampleRingBuffer {
     /** Reset the ring buffer (discards all pending data). */
     void reset() { fifo.reset(); }
 
+    /**
+     * Resize the ring buffer to a new capacity (discards all pending data).
+     * Must NOT be called while push() or drain() may be running concurrently.
+     *
+     * @param newCapacity  New ring buffer capacity in samples.
+     */
+    void resize(int newCapacity) {
+        fifo.setTotalSize(newCapacity);
+        samples.assign(static_cast<size_t>(newCapacity), 0.0f);
+        ppqs.assign(static_cast<size_t>(newCapacity), 0.0);
+    }
+
   private:
     juce::AbstractFifo fifo;
-    std::array<float,  CAPACITY> samples{};
-    std::array<double, CAPACITY> ppqs{};
+    std::vector<float>  samples;
+    std::vector<double> ppqs;
 };
 
 } // namespace audio
