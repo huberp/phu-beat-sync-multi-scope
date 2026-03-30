@@ -72,3 +72,4 @@ UI Timer (60 Hz)
 - **Network send/receive happens on the UI thread** (timer callbacks and receiver thread reads are consumed on UI thread via getReceivedSamples()).
 - **BeatSyncBuffer writes are audio-thread safe** (single float stores are naturally atomic on x86/x64).
 - **All PPQ calculations must use the DAW-provided position** from getPlayHead()->getPosition().
+- **MUST work without assumptions about BPM and Sample Rate**. Plugin must support common samplerates from 44.1khz, 48khz, 96khz and if possible 192khz as well. plugin must support bpms beginning from 40 bpm and above
