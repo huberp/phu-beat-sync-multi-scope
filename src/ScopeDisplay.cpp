@@ -55,13 +55,13 @@ void ScopeDisplay::setRemoteRawData(
         // PPQ advance per sample: use the sender's sample rate from CtrlBroadcaster
         // info if available; fall back to the receiver's sample rate otherwise.
         const double bpm = pkt.bpm > 0.0 ? pkt.bpm : 120.0;
-        double senderSampleRate = m_sampleRate > 0.0 ? m_sampleRate : 44100.0;
+        double effectiveSampleRate = m_sampleRate > 0.0 ? m_sampleRate : 44100.0;
         {
             auto infoIt = m_remoteInfoMap.find(pkt.instanceID);
             if (infoIt != m_remoteInfoMap.end() && infoIt->second.sampleRate > 0.0)
-                senderSampleRate = infoIt->second.sampleRate;
+                effectiveSampleRate = infoIt->second.sampleRate;
         }
-        const double ppqPerSample = bpm / (60.0 * senderSampleRate);
+        const double ppqPerSample = bpm / (60.0 * effectiveSampleRate);
 
         // Number of active RMS slots for the current display range — must match
         // computeMetrics() / drawRmsOverlay() so accumulation and read-back use

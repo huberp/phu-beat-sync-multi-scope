@@ -178,5 +178,11 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
 
     double m_lastWriteWindowStart = -1.0; // audio-thread only: last cycle start written
 
+    /** Copy a juce::String into the fixed 32-byte label buffer (max 31 chars + null). */
+    static void copyLabelToBuffer(const juce::String& label, char* buf) {
+        std::memset(buf, 0, 32);
+        std::strncpy(buf, label.substring(0, 31).toRawUTF8(), 31);
+    }
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhuBeatSyncMultiScopeAudioProcessor)
 };

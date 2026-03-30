@@ -10,8 +10,14 @@
 #endif
 
 // ============================================================================
-// Construction / Destruction
+// Local helper
 // ============================================================================
+
+static int64_t getProcessorTimeMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(
+        steady_clock::now().time_since_epoch()).count();
+}
 
 PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
     : AudioProcessor(BusesProperties()
@@ -131,8 +137,7 @@ void PhuBeatSyncMultiScopeAudioProcessor::prepareToPlay(double sampleRate, int s
         m_colourRGBA);
 
     // Reset heartbeat timer so we don't send a redundant Announce too soon
-    m_lastCtrlHeartbeatMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+    m_lastCtrlHeartbeatMs = getProcessorTimeMs();
 
 #ifndef NDEBUG
     if (editorLogger)
@@ -238,9 +243,7 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
 void PhuBeatSyncMultiScopeAudioProcessor::timerCallback() {
     // --- Ctrl heartbeat (every 5 s): keeps late-joining peers up to date ---
     {
-        using namespace std::chrono;
-        const int64_t nowMs = duration_cast<milliseconds>(
-            steady_clock::now().time_since_epoch()).count();
+        const int64_t nowMs = getProcessorTimeMs();
         if (nowMs - m_lastCtrlHeartbeatMs > CtrlBroadcaster::HEARTBEAT_INTERVAL_MS) {
             m_ctrlBroadcaster.sendCtrl(
                 phu::network::CtrlEventType::Announce,
@@ -314,9 +317,7 @@ void PhuBeatSyncMultiScopeAudioProcessor::setReceiveEnabled(bool enabled) {
 }
 
 void PhuBeatSyncMultiScopeAudioProcessor::setChannelLabel(const juce::String& label) {
-    const juce::String truncated = label.substring(0, 31);
-    std::memset(m_channelLabel.data(), 0, 32);
-    std::strncpy(m_channelLabel.data(), truncated.toRawUTF8(), 31);
+    copyLabelToBuffer(label, m_channelLabel.data());
 
     m_ctrlBroadcaster.sendCtrl(
         phu::network::CtrlEventType::LabelChange,
@@ -416,11 +417,9 @@ void PhuBeatSyncMultiScopeAudioProcessor::setStateInformation(const void* data, 
                 setReceiveEnabled(static_cast<bool>(state.getProperty("receiveEnabled")));
 
             // Restore channel identity
-            if (state.hasProperty("channelLabel")) {
-                const juce::String lbl = state.getProperty("channelLabel").toString();
-                std::memset(m_channelLabel.data(), 0, 32);
-                std::strncpy(m_channelLabel.data(), lbl.toRawUTF8(), 31);
-            }
+            if (state.hasProperty("channelLabel"))
+                copyLabelToBuffer(state.getProperty("channelLabel").toString(),
+                                  m_channelLabel.data());
             if (state.hasProperty("colourR"))
                 m_colourRGBA[0] = static_cast<uint8_t>(static_cast<int>(state.getProperty("colourR")));
             if (state.hasProperty("colourG"))
