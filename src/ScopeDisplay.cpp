@@ -18,11 +18,16 @@ void ScopeDisplay::setLocalData(const float* data, int numBins) {
     m_cancelOverlayDirty = true;
 }
 
+void ScopeDisplay::setRemoteInfos(const std::vector<phu::network::RemoteInstanceInfo>& infos) {
+    m_remoteInfoMap.clear();
+    for (const auto& info : infos)
+        m_remoteInfoMap[info.instanceID] = info;
+}
+
 void ScopeDisplay::setRemoteRawData(
     const std::vector<SampleBroadcaster::RemoteRawPacket>& remoteData) {
 
     const double receiverRange = m_displayRangeBeats > 0.0 ? m_displayRangeBeats : 1.0;
-    const double sampleRate    = m_sampleRate > 0.0 ? m_sampleRate : 44100.0;
 
     // Invalidate all accum buffers when the receiver's display range changes
     if (receiverRange != m_lastAccumReceiverRange) {
@@ -47,9 +52,16 @@ void ScopeDisplay::setRemoteRawData(
         accum.lastSeqNum = pkt.sequenceNumber;
         accum.hasSeq     = true;
 
-        // PPQ advance per sample: derived from sender BPM and receiver sample rate
+        // PPQ advance per sample: use the sender's sample rate from CtrlBroadcaster
+        // info if available; fall back to the receiver's sample rate otherwise.
         const double bpm = pkt.bpm > 0.0 ? pkt.bpm : 120.0;
-        const double ppqPerSample = bpm / (60.0 * sampleRate);
+        double effectiveSampleRate = m_sampleRate > 0.0 ? m_sampleRate : 44100.0;
+        {
+            auto infoIt = m_remoteInfoMap.find(pkt.instanceID);
+            if (infoIt != m_remoteInfoMap.end() && infoIt->second.sampleRate > 0.0)
+                effectiveSampleRate = infoIt->second.sampleRate;
+        }
+        const double ppqPerSample = bpm / (60.0 * effectiveSampleRate);
 
         // Number of active RMS slots for the current display range — must match
         // computeMetrics() / drawRmsOverlay() so accumulation and read-back use
@@ -176,10 +188,35 @@ void ScopeDisplay::paint(juce::Graphics& g) {
     if (m_showRemote && !m_remoteAccumBuffers.empty()) {
         int colourIdx = 0;
         for (const auto& kv : m_remoteAccumBuffers) {
-            if (!kv.second.bins.empty())
+            if (!kv.second.bins.empty()) {
+                // Use colour from CtrlBroadcaster info if available; fall back to palette
+                juce::Colour colour;
+                juce::String label;
+                auto infoIt = m_remoteInfoMap.find(kv.first);
+                if (infoIt != m_remoteInfoMap.end()) {
+                    const auto& info = infoIt->second;
+                    colour = juce::Colour(info.colourRGBA[0], info.colourRGBA[1],
+                                         info.colourRGBA[2], info.colourRGBA[3]);
+                    label = juce::String(info.channelLabel);
+                } else {
+                    colour = getRemoteColour(colourIdx);
+                }
+
                 drawWaveform(g, bounds, kv.second.bins.data(),
                              static_cast<int>(kv.second.bins.size()),
-                             getRemoteColour(colourIdx), 0.5f);
+                             colour, 0.5f);
+
+                // Draw channel label as small text in the top-left area
+                if (label.isNotEmpty()) {
+                    g.setColour(colour.withAlpha(0.85f));
+                    g.setFont(juce::Font(juce::FontOptions(11.0f)));
+                    g.drawText(label,
+                               static_cast<int>(bounds.getX() + 4),
+                               static_cast<int>(bounds.getY() + 4 + colourIdx * 14),
+                               150, 13,
+                               juce::Justification::centredLeft, true);
+                }
+            }
             ++colourIdx;
         }
     }

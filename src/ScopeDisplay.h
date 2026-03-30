@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../lib/audio/BeatSyncBuffer.h"
+#include "../lib/network/CtrlBroadcaster.h"
 #include "../lib/network/SampleBroadcaster.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <map>
@@ -38,6 +39,13 @@ class ScopeDisplay : public juce::Component {
      * metric buffers. sampleRate must be set via setSampleRate() first.
      */
     void setRemoteRawData(const std::vector<SampleBroadcaster::RemoteRawPacket>& remoteData);
+
+    /**
+     * Set the latest RemoteInstanceInfo snapshot from CtrlBroadcaster.
+     * Used for per-instance sampleRate, channelLabel, and colourRGBA.
+     * Call this before setRemoteRawData() each frame so the infos are current.
+     */
+    void setRemoteInfos(const std::vector<phu::network::RemoteInstanceInfo>& infos);
 
     /** Set the sample rate used for per-sample PPQ reconstruction. */
     void setSampleRate(double sampleRate) { m_sampleRate = sampleRate; }
@@ -112,7 +120,11 @@ class ScopeDisplay : public juce::Component {
     std::map<uint32_t, RemoteAccumEntry> m_remoteAccumBuffers;
     double m_lastAccumReceiverRange = -1.0; // invalidated when receiver range changes
 
+    // Remote instance identity: keyed by instanceID, updated via setRemoteInfos()
+    std::map<uint32_t, phu::network::RemoteInstanceInfo> m_remoteInfoMap;
+
     // Sample rate for per-sample PPQ reconstruction in setRemoteRawData()
+    // Used as a fallback when no CtrlBroadcaster info is available for a remote instance.
     double m_sampleRate = 44100.0;
 
     // Display state

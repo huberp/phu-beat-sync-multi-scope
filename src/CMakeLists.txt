@@ -28,6 +28,8 @@ target_sources(phu-beat-sync-multi-scope PRIVATE
     ../lib/network/MulticastBroadcasterBase.h
     ../lib/network/SampleBroadcaster.cpp
     ../lib/network/SampleBroadcaster.h
+    ../lib/network/CtrlBroadcaster.cpp
+    ../lib/network/CtrlBroadcaster.h
 )
 
 target_compile_definitions(phu-beat-sync-multi-scope PUBLIC
