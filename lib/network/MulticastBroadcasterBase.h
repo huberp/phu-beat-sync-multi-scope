@@ -71,6 +71,9 @@ class MulticastBroadcasterBase {
     /** This instance's unique ID (randomly generated on construction). */
     uint32_t getInstanceID() const { return instanceID; }
 
+    /** Override the instance ID. Must be called before initialize(). */
+    void setInstanceID(uint32_t id) { instanceID = id; }
+
   protected:
     // ---- Subclass hooks ---------------------------------------------------
 

@@ -100,6 +100,11 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     std::atomic<float>* m_pLpEnabled  = nullptr;
     std::atomic<float>* m_pLpFreq     = nullptr;
 
+    // Deferred state sync: on the first timer tick, re-read processor state
+    // to handle hosts that call setStateInformation after createEditor.
+    bool m_needsStateSync = true;
+    void syncUIFromProcessorState();
+
 #ifndef NDEBUG
     juce::TextEditor logTextEditor;
     juce::Label logLabel;

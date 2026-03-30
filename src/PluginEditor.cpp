@@ -222,14 +222,7 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
 #endif
 
     // Restore toggle states from processor
-    remoteDisplayToggle.setToggleState(audioProcessor.isReceiveEnabled(),
-                                       juce::dontSendNotification);
-    broadcastToggle.setToggleState(audioProcessor.isBroadcastEnabled(),
-                                   juce::dontSendNotification);
-
-    // Initialize scope display range
-    scopeDisplay.setDisplayRangeBeats(audioProcessor.getDisplayRangeBeats());
-    scopeDisplay.setRemoteDisplayEnabled(audioProcessor.isReceiveEnabled());
+    syncUIFromProcessorState();
 
     // Start UI refresh timer at 60 Hz
     startTimerHz(60);
@@ -351,10 +344,36 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
 }
 
 // ============================================================================
+// State Sync — reads all processor state into UI controls
+// ============================================================================
+
+void PhuBeatSyncMultiScopeAudioProcessorEditor::syncUIFromProcessorState() {
+    broadcastToggle.setToggleState(audioProcessor.isBroadcastEnabled(),
+                                   juce::dontSendNotification);
+    remoteDisplayToggle.setToggleState(audioProcessor.isReceiveEnabled(),
+                                       juce::dontSendNotification);
+
+    // Channel identity
+    channelLabelEditor.setText(audioProcessor.getChannelLabel(), juce::dontSendNotification);
+    const juce::Colour colour = audioProcessor.getInstanceColour();
+    colourSwatchButton.setColour(juce::TextButton::buttonColourId, colour);
+
+    // Scope display
+    scopeDisplay.setDisplayRangeBeats(audioProcessor.getDisplayRangeBeats());
+    scopeDisplay.setRemoteDisplayEnabled(audioProcessor.isReceiveEnabled());
+    scopeDisplay.setLocalColour(colour);
+}
+
+// ============================================================================
 // Timer Callback (60 Hz UI refresh)
 // ============================================================================
 
 void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
+    // Deferred state sync: handle hosts that call setStateInformation after createEditor
+    if (m_needsStateSync) {
+        syncUIFromProcessorState();
+        m_needsStateSync = false;
+    }
     auto& syncBuf = audioProcessor.getInputSyncBuffer();
     if (syncBuf.size() > 0) {
         // --- Update filter coefficients if sample rate or frequency changed ---
@@ -484,6 +503,7 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::changeListenerCallback(
         audioProcessor.setInstanceColour(newColour);
         colourSwatchButton.setColour(juce::TextButton::buttonColourId, newColour);
         colourSwatchButton.repaint();
+        scopeDisplay.setLocalColour(newColour);
     }
 }
 

@@ -227,7 +227,7 @@ void ScopeDisplay::paint(juce::Graphics& g) {
     if (m_showLocal && !m_localData.empty()) {
         drawWaveform(g, bounds, m_localData.data(),
                      static_cast<int>(m_localData.size()),
-                     juce::Colour(0xFF00FF88), 1.0f);
+                     m_localColour, 1.0f);
     }
 
     // Playhead

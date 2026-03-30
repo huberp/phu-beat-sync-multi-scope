@@ -36,6 +36,9 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
     // Initialize sample broadcaster networking
     m_sampleBroadcaster.initialize();
 
+    // Share the same instance ID so receivers can correlate CTRL info with sample data
+    m_ctrlBroadcaster.setInstanceID(m_sampleBroadcaster.getInstanceID());
+
     // Initialize ctrl broadcaster networking
     m_ctrlBroadcaster.initialize();
 

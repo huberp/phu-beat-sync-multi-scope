@@ -50,6 +50,9 @@ class ScopeDisplay : public juce::Component {
     /** Set the sample rate used for per-sample PPQ reconstruction. */
     void setSampleRate(double sampleRate) { m_sampleRate = sampleRate; }
 
+    /** Set the colour used for the local waveform trace. */
+    void setLocalColour(juce::Colour colour) { m_localColour = colour; }
+
     /** Enable or disable rendering of local data (toggle). */
     void setLocalDisplayEnabled(bool enabled) { m_showLocal = enabled; }
     bool isLocalDisplayEnabled() const { return m_showLocal; }
@@ -128,6 +131,7 @@ class ScopeDisplay : public juce::Component {
     double m_sampleRate = 44100.0;
 
     // Display state
+    juce::Colour m_localColour{0xFF00FF88}; // default bright green
     bool m_showLocal = true;
     bool m_showRemote = true;
     double m_currentPpq = 0.0;
