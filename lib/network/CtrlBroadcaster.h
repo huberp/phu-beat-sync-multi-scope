@@ -18,12 +18,12 @@ enum class CtrlEventType : uint8_t {
     Goodbye     = 0x04,  ///< releaseResources / shutdown
 };
 
-// Wire format for CTRL packets (packed, ~76 bytes).
+// Wire format for CTRL packets (packed, ~96 bytes).
 // magic = 0x4354524C ("CTRL")
 #pragma pack(push, 1)
 struct CtrlPacket {
     uint32_t magic;               // 0x4354524C ("CTRL")
-    uint32_t version;             // 1
+    uint32_t version;             // protocol version (see PROTOCOL_VERSION)
     uint32_t instanceID;
     uint32_t sequenceNumber;      // monotonic, for ordering
 
@@ -38,7 +38,10 @@ struct CtrlPacket {
     char     channelLabel[32];    // null-terminated UTF-8, user-assigned
     uint8_t  colourRGBA[4];       // optional user-set colour
 
-    // Total: ~76 bytes
+    char     pluginType[16];      // null-terminated ASCII plugin-family identifier
+    uint32_t pluginVersion;       // plugin version (same encoding as protocol version)
+
+    // Total: ~96 bytes
 };
 #pragma pack(pop)
 
@@ -53,6 +56,8 @@ struct RemoteInstanceInfo {
     float    bpm               = 0.0f;
     char     channelLabel[32]  = {};
     uint8_t  colourRGBA[4]     = {0x88, 0x88, 0x88, 0xFF};
+    char     pluginType[16]    = {};      ///< null-terminated ASCII plugin-family identifier
+    uint32_t pluginVersion     = 0;       ///< plugin version
 };
 
 /**
@@ -87,7 +92,7 @@ class CtrlBroadcaster : public MulticastBroadcasterBase {
     static constexpr int64_t     STALE_TIMEOUT_MS      = 15000;
 
     /** Protocol version — bumped when wire format changes. */
-    static constexpr uint32_t    PROTOCOL_VERSION      = 1;
+    static constexpr uint32_t    PROTOCOL_VERSION      = 2;
 
     CtrlBroadcaster();
     ~CtrlBroadcaster() override = default;
@@ -105,12 +110,15 @@ class CtrlBroadcaster : public MulticastBroadcasterBase {
      * @param sampleRate         Actual DAW sample rate
      * @param maxBufferSize      Maximum audio buffer size
      * @param colourRGBA         User colour (4-byte RGBA)
+     * @param pluginType         Plugin-family identifier (null-terminated, max 15 chars)
+     * @param pluginVersion      Plugin version number
      * @return true if the packet was sent successfully
      */
     bool sendCtrl(CtrlEventType eventType, const char* label,
                   float displayRangeBeats, float bpm,
                   double sampleRate, uint32_t maxBufferSize,
-                  const uint8_t colourRGBA[4]);
+                  const uint8_t colourRGBA[4],
+                  const char* pluginType, uint32_t pluginVersion);
 
     /**
      * Fill @p out with the latest info for each online remote instance.
