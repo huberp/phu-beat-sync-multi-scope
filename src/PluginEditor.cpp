@@ -81,6 +81,47 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
     };
     addAndMakeVisible(broadcastToggle);
 
+    // --- Channel Identity Group ---
+    identityGroup.setText("Identity");
+    addAndMakeVisible(identityGroup);
+
+    channelLabelTextLabel.setText("Label:", juce::dontSendNotification);
+    channelLabelTextLabel.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(channelLabelTextLabel);
+
+    channelLabelEditor.setMultiLine(false);
+    channelLabelEditor.setReturnKeyStartsNewLine(false);
+    channelLabelEditor.setInputRestrictions(31); // max 31 chars (+ null terminator = 32)
+    channelLabelEditor.setText(audioProcessor.getChannelLabel(), juce::dontSendNotification);
+    channelLabelEditor.onReturnKey = [this]() {
+        audioProcessor.setChannelLabel(channelLabelEditor.getText());
+        channelLabelEditor.giveAwayKeyboardFocus();
+    };
+    channelLabelEditor.onFocusLost = [this]() {
+        audioProcessor.setChannelLabel(channelLabelEditor.getText());
+    };
+    addAndMakeVisible(channelLabelEditor);
+
+    // Colour swatch: shows current instance colour; click opens JUCE ColourSelector
+    const juce::Colour initialColour = audioProcessor.getInstanceColour();
+    colourSwatchButton.setButtonText({});
+    colourSwatchButton.setColour(juce::TextButton::buttonColourId, initialColour);
+    colourSwatchButton.setTooltip("Click to change instance colour");
+    colourSwatchButton.onClick = [this]() {
+        auto* selector = new juce::ColourSelector(
+            juce::ColourSelector::showColourAtTop |
+            juce::ColourSelector::showSliders    |
+            juce::ColourSelector::showColourspace);
+        selector->setName("Colour");
+        selector->setCurrentColour(audioProcessor.getInstanceColour());
+        selector->setSize(300, 280);
+        selector->addChangeListener(this);
+        juce::CallOutBox::launchAsynchronously(
+            std::unique_ptr<juce::Component>(selector),
+            colourSwatchButton.getScreenBounds(), nullptr);
+    };
+    addAndMakeVisible(colourSwatchButton);
+
     // --- Display Filters Group ---
     filtersGroup.setText("Display Filters");
     addAndMakeVisible(filtersGroup);
@@ -239,7 +280,7 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     controlStrip.removeFromLeft(20); // Spacing
 
     // Remote controls group
-    auto remoteArea = controlStrip.removeFromLeft(420);
+    auto remoteArea = controlStrip.removeFromLeft(370);
     remoteGroup.setBounds(remoteArea);
     auto remoteContent = remoteArea.reduced(10, 0);
     remoteContent.removeFromTop(16); // Space for group title
@@ -249,6 +290,20 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     remoteDisplayToggle.setBounds(remoteContent.removeFromLeft(110));
     remoteContent.removeFromLeft(6);
     broadcastToggle.setBounds(remoteContent.removeFromLeft(110));
+
+    controlStrip.removeFromLeft(8); // Spacing
+
+    // Identity group (channel label + colour swatch)
+    auto identityArea = controlStrip;
+    identityGroup.setBounds(identityArea);
+    auto identityContent = identityArea.reduced(8, 0);
+    identityContent.removeFromTop(16);
+    identityContent.removeFromBottom(4);
+    channelLabelTextLabel.setBounds(identityContent.removeFromLeft(40));
+    identityContent.removeFromLeft(4);
+    colourSwatchButton.setBounds(identityContent.removeFromRight(24));
+    identityContent.removeFromRight(4);
+    channelLabelEditor.setBounds(identityContent);
 
     // Display Filters strip (second control row)
     auto filtersStrip = area.removeFromTop(70);
@@ -362,11 +417,17 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
 
     // Get remote data if enabled (network receive on UI thread, per requirement)
     if (remoteDisplayToggle.getToggleState()) {
+        // Fetch remote instance infos first so ScopeDisplay has current sampleRate,
+        // colour, and label before processing the raw sample packets.
+        audioProcessor.getCtrlBroadcaster().getRemoteInfos(m_remoteInfosCache);
+        scopeDisplay.setRemoteInfos(m_remoteInfosCache);
+
         // Use the persistent cache vector — reuses its capacity each frame,
         // avoiding a heap allocation per 60 Hz tick.
         audioProcessor.getSampleBroadcaster().getReceivedPackets(m_remoteDataCache);
         scopeDisplay.setRemoteRawData(m_remoteDataCache);
     } else {
+        scopeDisplay.setRemoteInfos({});
         scopeDisplay.setRemoteRawData({});
     }
 
@@ -409,6 +470,20 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::updateDisplayRangeConstraints() 
                 break;
             }
         }
+    }
+}
+
+// ============================================================================
+// ChangeListener — handles colour selector popup
+// ============================================================================
+
+void PhuBeatSyncMultiScopeAudioProcessorEditor::changeListenerCallback(
+    juce::ChangeBroadcaster* source) {
+    if (auto* selector = dynamic_cast<juce::ColourSelector*>(source)) {
+        const juce::Colour newColour = selector->getCurrentColour();
+        audioProcessor.setInstanceColour(newColour);
+        colourSwatchButton.setColour(juce::TextButton::buttonColourId, newColour);
+        colourSwatchButton.repaint();
     }
 }
 

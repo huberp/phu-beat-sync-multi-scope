@@ -11,7 +11,8 @@ class PhuBeatSyncMultiScopeAudioProcessor;
 class PhuBeatSyncMultiScopeAudioProcessorEditor
     : public juce::AudioProcessorEditor,
       public juce::Timer,
-      public juce::AudioProcessorValueTreeState::Listener {
+      public juce::AudioProcessorValueTreeState::Listener,
+      public juce::ChangeListener {
   public:
     PhuBeatSyncMultiScopeAudioProcessorEditor(PhuBeatSyncMultiScopeAudioProcessor&);
     ~PhuBeatSyncMultiScopeAudioProcessorEditor() override;
@@ -22,6 +23,9 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
 
     /** APVTS listener — enforces HP freq < LP freq constraint. */
     void parameterChanged(const juce::String& parameterID, float newValue) override;
+
+    /** ChangeListener — handles colour selector changes. */
+    void changeListenerCallback(juce::ChangeBroadcaster* source) override;
 
     /**
      * Greys out display-range combo-box items that exceed the maximum supported
@@ -50,6 +54,12 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     juce::ToggleButton remoteDisplayToggle;  // Show/hide remote waveforms
     juce::ToggleButton broadcastToggle;       // Enable/disable broadcasting
 
+    // Channel identity controls
+    juce::GroupComponent identityGroup;
+    juce::Label          channelLabelTextLabel;  // "Label:" label
+    juce::TextEditor     channelLabelEditor;     // editable channel name (max 31 chars)
+    juce::TextButton     colourSwatchButton;     // shows current colour; click to change
+
     // Display filter controls
     juce::GroupComponent filtersGroup;
     DisplayFilterStrip hpFilterStrip;
@@ -74,6 +84,9 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
 
     // Persistent cache for remote raw packets — reused each frame to avoid heap allocation
     std::vector<SampleBroadcaster::RemoteRawPacket> m_remoteDataCache;
+
+    // Persistent cache for remote instance infos — updated each frame from CtrlBroadcaster
+    std::vector<phu::network::RemoteInstanceInfo> m_remoteInfosCache;
 
     // Track last BPM-derived max display range to avoid redundant combo-box updates
     double m_lastMaxDisplayBeats = 8.0;

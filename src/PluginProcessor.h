@@ -4,7 +4,9 @@
 #include "../lib/audio/AudioSampleRingBuffer.h"
 #include "../lib/audio/BeatSyncBuffer.h"
 #include "../lib/events/SyncGlobals.h"
+#include "../lib/network/CtrlBroadcaster.h"
 #include "../lib/network/SampleBroadcaster.h"
+#include <array>
 #include <atomic>
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -17,6 +19,7 @@ using phu::audio::AudioSampleFifo;
 using phu::audio::AudioSampleRingBuffer;
 using phu::audio::BeatSyncBuffer;
 using phu::events::GlobalsEventListener;
+using phu::network::CtrlBroadcaster;
 using phu::network::SampleBroadcaster;
 
 class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
@@ -69,13 +72,24 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     phu::events::SyncGlobals& getSyncGlobals() { return m_syncGlobals; }
 
     // Display range in beats (settable from UI thread)
-    void setDisplayRangeBeats(double beats) { m_displayRangeBeats.store(beats); }
+    void setDisplayRangeBeats(double beats);
     double getDisplayRangeBeats() const { return m_displayRangeBeats.load(); }
 
     // Sample broadcasting (owned by processor for headless operation)
     SampleBroadcaster& getSampleBroadcaster() { return m_sampleBroadcaster; }
     bool isBroadcastEnabled() const { return m_broadcastEnabled.load(); }
     void setBroadcastEnabled(bool enabled);
+
+    // Control broadcaster (instance identity, sample rate, label)
+    CtrlBroadcaster& getCtrlBroadcaster() { return m_ctrlBroadcaster; }
+
+    /** Set the user-visible channel label (max 31 UTF-8 bytes). Sends a LabelChange ctrl packet. */
+    void setChannelLabel(const juce::String& label);
+    juce::String getChannelLabel() const;
+
+    /** Set the user colour for this instance. Sends an Announce ctrl packet. */
+    void setInstanceColour(juce::Colour colour);
+    juce::Colour getInstanceColour() const;
 
     /** juce::Timer callback — drains raw sample ring buffer and sends packets (~30 Hz). */
     void timerCallback() override;
@@ -136,6 +150,20 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     SampleBroadcaster m_sampleBroadcaster;
     std::atomic<bool> m_broadcastEnabled{false};
     std::atomic<bool> m_receiveEnabled{true};
+
+    // Control broadcaster (instance identity)
+    CtrlBroadcaster m_ctrlBroadcaster;
+
+    // Channel identity (persisted in state)
+    std::array<char, 32> m_channelLabel{};
+    uint8_t m_colourRGBA[4] = {0x00, 0xFF, 0x88, 0xFF}; // default: bright green
+
+    // Current DAW stream parameters — updated in prepareToPlay, read by ctrl send helpers
+    double m_currentSampleRate   = 44100.0;
+    int    m_currentMaxBufSize   = 512;
+
+    // Heartbeat tracking (message thread only)
+    int64_t m_lastCtrlHeartbeatMs = 0;
 
     // Raw sample ring buffer: audio thread writes mono samples + PPQ; message thread drains.
     // Loopback-only — sized for ~370 ms to absorb timer hiccups without dropping samples.

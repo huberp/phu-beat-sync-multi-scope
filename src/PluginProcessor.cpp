@@ -1,7 +1,9 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "../lib/network/SampleBroadcaster.h"
+#include <chrono>
 #include <cmath>
+#include <cstring>
 
 #ifndef NDEBUG
 #include "../lib/debug/EditorLogger.h"
@@ -23,6 +25,9 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
     // Initialize sample broadcaster networking
     m_sampleBroadcaster.initialize();
 
+    // Initialize ctrl broadcaster networking
+    m_ctrlBroadcaster.initialize();
+
     // Start processor-owned broadcast timer (30 Hz) so broadcasting continues
     // even when the plugin editor is closed. The timer drains the raw sample
     // ring buffer in full chunks of BROADCAST_CHUNK_SAMPLES, sending as many
@@ -33,6 +38,7 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
 
 PhuBeatSyncMultiScopeAudioProcessor::~PhuBeatSyncMultiScopeAudioProcessor() {
     stopTimer(); // Stop before destroying members that the callback uses
+    m_ctrlBroadcaster.shutdown();
     m_sampleBroadcaster.shutdown();
 }
 
@@ -100,7 +106,7 @@ int PhuBeatSyncMultiScopeAudioProcessor::computeInputFifoCapacity(double sampleR
 // Audio Processing
 // ============================================================================
 
-void PhuBeatSyncMultiScopeAudioProcessor::prepareToPlay(double sampleRate, int /*samplesPerBlock*/) {
+void PhuBeatSyncMultiScopeAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     m_syncGlobals.updateSampleRate(sampleRate);
     m_inputSyncBuf.prepare(NUM_SYNC_BINS);
 
@@ -110,6 +116,24 @@ void PhuBeatSyncMultiScopeAudioProcessor::prepareToPlay(double sampleRate, int /
 
     m_inputFifo.reset();
 
+    // Track DAW stream parameters for ctrl packets
+    m_currentSampleRate = sampleRate;
+    m_currentMaxBufSize = samplesPerBlock;
+
+    // Announce this instance to peers (carries actual sampleRate, fixing ASSUMED_SAMPLE_RATE)
+    m_ctrlBroadcaster.sendCtrl(
+        phu::network::CtrlEventType::Announce,
+        m_channelLabel.data(),
+        static_cast<float>(m_displayRangeBeats.load()),
+        static_cast<float>(m_syncGlobals.getBPM()),
+        sampleRate,
+        static_cast<uint32_t>(samplesPerBlock),
+        m_colourRGBA);
+
+    // Reset heartbeat timer so we don't send a redundant Announce too soon
+    m_lastCtrlHeartbeatMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
 #ifndef NDEBUG
     if (editorLogger)
         editorLogger->markCurrentThreadAsAudioThread();
@@ -117,7 +141,15 @@ void PhuBeatSyncMultiScopeAudioProcessor::prepareToPlay(double sampleRate, int /
 }
 
 void PhuBeatSyncMultiScopeAudioProcessor::releaseResources() {
-    // Nothing to release
+    // Send Goodbye so peers know this instance is going offline
+    m_ctrlBroadcaster.sendCtrl(
+        phu::network::CtrlEventType::Goodbye,
+        m_channelLabel.data(),
+        static_cast<float>(m_displayRangeBeats.load()),
+        static_cast<float>(m_syncGlobals.getBPM()),
+        m_currentSampleRate,
+        static_cast<uint32_t>(m_currentMaxBufSize),
+        m_colourRGBA);
 }
 
 void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
@@ -204,6 +236,24 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
 // ============================================================================
 
 void PhuBeatSyncMultiScopeAudioProcessor::timerCallback() {
+    // --- Ctrl heartbeat (every 5 s): keeps late-joining peers up to date ---
+    {
+        using namespace std::chrono;
+        const int64_t nowMs = duration_cast<milliseconds>(
+            steady_clock::now().time_since_epoch()).count();
+        if (nowMs - m_lastCtrlHeartbeatMs > CtrlBroadcaster::HEARTBEAT_INTERVAL_MS) {
+            m_ctrlBroadcaster.sendCtrl(
+                phu::network::CtrlEventType::Announce,
+                m_channelLabel.data(),
+                static_cast<float>(m_displayRangeBeats.load()),
+                static_cast<float>(m_syncGlobals.getBPM()),
+                m_currentSampleRate,
+                static_cast<uint32_t>(m_currentMaxBufSize),
+                m_colourRGBA);
+            m_lastCtrlHeartbeatMs = nowMs;
+        }
+    }
+
     if (!m_broadcastEnabled.load(std::memory_order_relaxed))
         return;
 
@@ -241,6 +291,18 @@ void PhuBeatSyncMultiScopeAudioProcessor::timerCallback() {
 // Broadcast Control
 // ============================================================================
 
+void PhuBeatSyncMultiScopeAudioProcessor::setDisplayRangeBeats(double beats) {
+    m_displayRangeBeats.store(beats);
+    m_ctrlBroadcaster.sendCtrl(
+        phu::network::CtrlEventType::RangeChange,
+        m_channelLabel.data(),
+        static_cast<float>(beats),
+        static_cast<float>(m_syncGlobals.getBPM()),
+        m_currentSampleRate,
+        static_cast<uint32_t>(m_currentMaxBufSize),
+        m_colourRGBA);
+}
+
 void PhuBeatSyncMultiScopeAudioProcessor::setBroadcastEnabled(bool enabled) {
     m_broadcastEnabled.store(enabled);
     m_sampleBroadcaster.setBroadcastEnabled(enabled);
@@ -249,6 +311,45 @@ void PhuBeatSyncMultiScopeAudioProcessor::setBroadcastEnabled(bool enabled) {
 void PhuBeatSyncMultiScopeAudioProcessor::setReceiveEnabled(bool enabled) {
     m_receiveEnabled.store(enabled);
     m_sampleBroadcaster.setReceiveEnabled(enabled);
+}
+
+void PhuBeatSyncMultiScopeAudioProcessor::setChannelLabel(const juce::String& label) {
+    const juce::String truncated = label.substring(0, 31);
+    std::memset(m_channelLabel.data(), 0, 32);
+    std::strncpy(m_channelLabel.data(), truncated.toRawUTF8(), 31);
+
+    m_ctrlBroadcaster.sendCtrl(
+        phu::network::CtrlEventType::LabelChange,
+        m_channelLabel.data(),
+        static_cast<float>(m_displayRangeBeats.load()),
+        static_cast<float>(m_syncGlobals.getBPM()),
+        m_currentSampleRate,
+        static_cast<uint32_t>(m_currentMaxBufSize),
+        m_colourRGBA);
+}
+
+juce::String PhuBeatSyncMultiScopeAudioProcessor::getChannelLabel() const {
+    return juce::String::fromUTF8(m_channelLabel.data());
+}
+
+void PhuBeatSyncMultiScopeAudioProcessor::setInstanceColour(juce::Colour colour) {
+    m_colourRGBA[0] = colour.getRed();
+    m_colourRGBA[1] = colour.getGreen();
+    m_colourRGBA[2] = colour.getBlue();
+    m_colourRGBA[3] = colour.getAlpha();
+
+    m_ctrlBroadcaster.sendCtrl(
+        phu::network::CtrlEventType::Announce,
+        m_channelLabel.data(),
+        static_cast<float>(m_displayRangeBeats.load()),
+        static_cast<float>(m_syncGlobals.getBPM()),
+        m_currentSampleRate,
+        static_cast<uint32_t>(m_currentMaxBufSize),
+        m_colourRGBA);
+}
+
+juce::Colour PhuBeatSyncMultiScopeAudioProcessor::getInstanceColour() const {
+    return juce::Colour(m_colourRGBA[0], m_colourRGBA[1], m_colourRGBA[2], m_colourRGBA[3]);
 }
 
 // ============================================================================
@@ -290,6 +391,13 @@ void PhuBeatSyncMultiScopeAudioProcessor::getStateInformation(juce::MemoryBlock&
     state.setProperty("broadcastEnabled", m_broadcastEnabled.load(), nullptr);
     state.setProperty("receiveEnabled", m_receiveEnabled.load(), nullptr);
 
+    // Save channel identity
+    state.setProperty("channelLabel", juce::String::fromUTF8(m_channelLabel.data()), nullptr);
+    state.setProperty("colourR", static_cast<int>(m_colourRGBA[0]), nullptr);
+    state.setProperty("colourG", static_cast<int>(m_colourRGBA[1]), nullptr);
+    state.setProperty("colourB", static_cast<int>(m_colourRGBA[2]), nullptr);
+    state.setProperty("colourA", static_cast<int>(m_colourRGBA[3]), nullptr);
+
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
 }
@@ -306,6 +414,21 @@ void PhuBeatSyncMultiScopeAudioProcessor::setStateInformation(const void* data, 
                 setBroadcastEnabled(static_cast<bool>(state.getProperty("broadcastEnabled")));
             if (state.hasProperty("receiveEnabled"))
                 setReceiveEnabled(static_cast<bool>(state.getProperty("receiveEnabled")));
+
+            // Restore channel identity
+            if (state.hasProperty("channelLabel")) {
+                const juce::String lbl = state.getProperty("channelLabel").toString();
+                std::memset(m_channelLabel.data(), 0, 32);
+                std::strncpy(m_channelLabel.data(), lbl.toRawUTF8(), 31);
+            }
+            if (state.hasProperty("colourR"))
+                m_colourRGBA[0] = static_cast<uint8_t>(static_cast<int>(state.getProperty("colourR")));
+            if (state.hasProperty("colourG"))
+                m_colourRGBA[1] = static_cast<uint8_t>(static_cast<int>(state.getProperty("colourG")));
+            if (state.hasProperty("colourB"))
+                m_colourRGBA[2] = static_cast<uint8_t>(static_cast<int>(state.getProperty("colourB")));
+            if (state.hasProperty("colourA"))
+                m_colourRGBA[3] = static_cast<uint8_t>(static_cast<int>(state.getProperty("colourA")));
         }
     }
 }

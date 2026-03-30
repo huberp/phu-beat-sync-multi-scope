@@ -36,8 +36,8 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     /** Multicast group address (administratively scoped, local org). */
     static constexpr const char* MULTICAST_GROUP = "239.255.42.1";
 
-    /** UDP port for sample multicasts (separate from spectrum port 49421). */
-    static constexpr int MULTICAST_PORT = 49423;
+    /** UDP port for sample multicasts (separate from spectrum port 49421 and CTRL port 49423). */
+    static constexpr int MULTICAST_PORT = 49422;
 
     /**
      * Number of raw mono samples sent per packet.

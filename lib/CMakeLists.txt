@@ -20,6 +20,7 @@ target_sources(BeatSyncLib INTERFACE
     # Network components
     ${CMAKE_CURRENT_SOURCE_DIR}/network/MulticastBroadcasterBase.h
     ${CMAKE_CURRENT_SOURCE_DIR}/network/SampleBroadcaster.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/network/CtrlBroadcaster.h
 
     # Debug components (debug builds only)
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/EditorLogger.h
