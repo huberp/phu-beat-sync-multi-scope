@@ -40,11 +40,14 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     static constexpr int MULTICAST_PORT = 49422;
 
     /**
-     * Number of raw mono samples sent per packet.
-     * Chosen so that one packet covers approximately 33 ms at 44.1 kHz.
+     * Maximum number of raw mono samples that can be stored in a single packet.
+     * Sized for approximately 33 ms at 192 kHz (the highest supported sample rate).
+     * This is a capacity bound for the packet struct arrays — the actual runtime
+     * chunk size is determined dynamically in prepareToPlay() based on the DAW
+     * sample rate and stored in PluginProcessor::m_broadcastChunkSize.
      * Loopback only — packet size is not constrained by the Ethernet MTU.
      */
-    static constexpr int BROADCAST_CHUNK_SAMPLES = 1470;
+    static constexpr int BROADCAST_CHUNK_SAMPLES = 6350;
 
     /** Protocol version — bumped when wire format changes. */
     static constexpr uint32_t PROTOCOL_VERSION = 3;

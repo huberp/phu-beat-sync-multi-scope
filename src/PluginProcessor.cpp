@@ -134,6 +134,22 @@ void PhuBeatSyncMultiScopeAudioProcessor::prepareToPlay(double sampleRate, int s
     m_currentSampleRate = sampleRate;
     m_currentMaxBufSize = samplesPerBlock;
 
+    // Compute the broadcast chunk size for this sample rate so that each packet
+    // covers ~33 ms regardless of the DAW sample rate.
+    // Clamped to [1470, BROADCAST_CHUNK_SAMPLES] to stay within the packet struct capacity.
+    m_broadcastChunkSize = static_cast<int>(std::round(sampleRate * 0.033));
+    m_broadcastChunkSize = juce::jlimit(
+        1470,
+        phu::network::SampleBroadcaster::BROADCAST_CHUNK_SAMPLES,
+        m_broadcastChunkSize);
+
+    // Resize the raw broadcast ring to at least 4× the chunk size so that a
+    // worst-case delayed 30 Hz timer tick never overflows the ring at any
+    // supported sample rate (44.1 kHz – 192 kHz).
+    const int ringCapacity = m_broadcastChunkSize * 4;
+    m_rawBroadcastRing.resize(ringCapacity);
+    m_rawBroadcastRing.reset();
+
     // Announce this instance to peers (carries actual sampleRate, fixing ASSUMED_SAMPLE_RATE)
     m_ctrlBroadcaster.sendCtrl(
         phu::network::CtrlEventType::Announce,
@@ -271,7 +287,7 @@ void PhuBeatSyncMultiScopeAudioProcessor::timerCallback() {
     if (!m_broadcastEnabled.load(std::memory_order_relaxed))
         return;
 
-    const int chunkSize = phu::network::SampleBroadcaster::BROADCAST_CHUNK_SAMPLES;
+    const int chunkSize = m_broadcastChunkSize;
 
     // Ensure work buffers are large enough (allocated once, never reallocated)
     if (static_cast<int>(m_broadcastSampleBuf.size()) < chunkSize) {
