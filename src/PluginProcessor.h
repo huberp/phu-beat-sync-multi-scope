@@ -99,6 +99,18 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     // Number of bins for BeatSyncBuffer
     static constexpr int NUM_SYNC_BINS = 4096;
 
+    // ---- Phase-3 local sample ring: (monoSample, absolutePpq) pairs --------
+    // Audio thread writes one pair per sample; the UI timer drains this ring and
+    // forwards each pair to ScopeDisplay::writeLocalSample().  Capacity = 2 ×
+    // broadcast chunk size (~66 ms @ 192 kHz), providing ≥ 4× headroom for the
+    // 60 Hz UI drain rate.
+    static constexpr int LOCAL_RING_CAPACITY =
+        phu::network::SampleBroadcaster::BROADCAST_CHUNK_SAMPLES * 2; // 12700
+
+    juce::AbstractFifo& getLocalRingFifo() { return m_localRingFifo; }
+    const std::array<float,  LOCAL_RING_CAPACITY>& getLocalRingSamples() const { return m_localRingSamples; }
+    const std::array<double, LOCAL_RING_CAPACITY>& getLocalRingPpqs()    const { return m_localRingPpqs; }
+
     /**
      * Returns the maximum allowed display range (in beats) for a given BPM.
      *
@@ -174,6 +186,12 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     };
     BroadcastSlot m_broadcastSlots[2];
     int           m_broadcastWriteSlot = 0; // audio thread only
+
+    // Phase-3 local SPSC ring: (monoSample, absolutePpq) pairs
+    // Audio thread writes; UI thread drains via getLocalRingFifo().
+    juce::AbstractFifo                           m_localRingFifo   { LOCAL_RING_CAPACITY };
+    std::array<float,  LOCAL_RING_CAPACITY>      m_localRingSamples{};
+    std::array<double, LOCAL_RING_CAPACITY>      m_localRingPpqs   {};
 
     // Sequence number for outgoing RawSamplesPackets (audio thread only)
     uint32_t m_broadcastSeqNum = 0;

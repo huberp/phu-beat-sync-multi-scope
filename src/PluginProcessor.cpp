@@ -229,6 +229,27 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
         const float* ch1 = (activeCh > 1) ? buffer.getReadPointer(1) : ch0;
         const float monoScale = (activeCh == 1) ? 1.0f : 0.5f;
 
+        // --- Phase-3: batch-push (monoSample, absolutePpq) to the local SPSC ring.
+        // The UI thread drains this ring to write into RawSampleBuffer[local].
+        // AbstractFifo::write() silently reserves fewer slots when the ring is near
+        // full; any overflow samples are dropped (ring is sized for 4× headroom).
+        {
+            const auto scope = m_localRingFifo.write(numSamples);
+            for (int i = 0; i < scope.blockSize1; ++i) {
+                m_localRingSamples[static_cast<size_t>(scope.startIndex1 + i)] =
+                    (ch0[i] + ch1[i]) * monoScale;
+                m_localRingPpqs[static_cast<size_t>(scope.startIndex1 + i)] =
+                    blockPpq + static_cast<double>(i) * ppqPerSample;
+            }
+            for (int i = 0; i < scope.blockSize2; ++i) {
+                const int si = scope.blockSize1 + i;
+                m_localRingSamples[static_cast<size_t>(scope.startIndex2 + i)] =
+                    (ch0[si] + ch1[si]) * monoScale;
+                m_localRingPpqs[static_cast<size_t>(scope.startIndex2 + i)] =
+                    blockPpq + static_cast<double>(si) * ppqPerSample;
+            }
+        }
+
         // Replace std::fmod per sample with a linear normalized-position increment.
         // Start at the block's normalized position and advance by normStep each sample,
         // wrapping with a single branch — eliminates N libm fmod calls per block.

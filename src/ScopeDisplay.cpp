@@ -6,131 +6,381 @@
 
 ScopeDisplay::ScopeDisplay() {
     setOpaque(true);
+    // Slot 0 is always the local instance
+    m_instances[0].active     = true;
+    m_instances[0].instanceID = 0; // local has no remote ID
 }
 
 // ============================================================================
-// Data Updates (called from UI timer)
+// Configuration
 // ============================================================================
 
-void ScopeDisplay::setLocalData(const float* data, int numBins) {
-    m_localData.assign(data, data + numBins);
+void ScopeDisplay::prepare(double displayBeats, double bpm, double sampleRate) {
+    m_displayRangeBeats = (displayBeats > 0.0) ? displayBeats : 1.0;
+    m_bpm               = (bpm         > 0.0) ? bpm          : 120.0;
+    m_sampleRate        = (sampleRate  > 0.0) ? sampleRate   : 44100.0;
+
+    for (auto& inst : m_instances) {
+        if (inst.active)
+            prepareInstance(inst);
+    }
+
     m_rmsOverlayDirty    = true;
     m_cancelOverlayDirty = true;
 }
 
-void ScopeDisplay::setRemoteInfos(const std::vector<phu::network::RemoteInstanceInfo>& infos) {
+void ScopeDisplay::prepareInstance(InstanceSlot& inst) {
+    inst.buffer.prepare(m_displayRangeBeats, m_bpm, m_sampleRate);
+    const int N = inst.buffer.size();
+    inst.rmsBuckets.recompute(m_bpm, m_sampleRate, m_displayRangeBeats, N);
+    inst.cancelBuckets.recompute(m_bpm, m_sampleRate, m_displayRangeBeats, N);
+    inst.rmsValues.assign(static_cast<size_t>(inst.rmsBuckets.bucketCount()), 0.0f);
+    inst.displayBins.assign(DISPLAY_BINS, 0.0f);
+    inst.lastWindowStart = -1e18;
+    updateInstanceFilter(inst);
+}
+
+void ScopeDisplay::updateInstanceFilter(InstanceSlot& inst) {
+    if (m_sampleRate <= 0.0) return;
+    inst.filterHP.setParams(LinkwitzRiley::FilterType::HighPass,
+                            LinkwitzRiley::Slope::DB48,
+                            m_hpFreq,
+                            static_cast<float>(m_sampleRate));
+    inst.filterHP.reset();
+    inst.filterLP.setParams(LinkwitzRiley::FilterType::LowPass,
+                            LinkwitzRiley::Slope::DB48,
+                            m_lpFreq,
+                            static_cast<float>(m_sampleRate));
+    inst.filterLP.reset();
+}
+
+void ScopeDisplay::setFilterParams(bool hpEnabled, float hpFreq,
+                                    bool lpEnabled, float lpFreq,
+                                    double sampleRate) {
+    m_hpEnabled = hpEnabled;
+    m_hpFreq    = hpFreq;
+    m_lpEnabled = lpEnabled;
+    m_lpFreq    = lpFreq;
+    m_sampleRate = (sampleRate > 0.0) ? sampleRate : m_sampleRate;
+
+    for (auto& inst : m_instances) {
+        if (inst.active)
+            updateInstanceFilter(inst);
+    }
+
+    m_rmsOverlayDirty    = true;
+    m_cancelOverlayDirty = true;
+}
+
+// ============================================================================
+// Data Ingestion
+// ============================================================================
+
+void ScopeDisplay::applyFilterAndWrite(InstanceSlot& inst, float sample, double ppq) {
+    if (inst.buffer.size() <= 0) return;
+
+    // Detect display-cycle boundary to reset filter state on PPQ wrap
+    if (m_displayRangeBeats > 0.0) {
+        const double windowStart =
+            std::floor(ppq / m_displayRangeBeats) * m_displayRangeBeats;
+        if (std::abs(windowStart - inst.lastWindowStart) > 1e-9) {
+            inst.filterHP.reset();
+            inst.filterLP.reset();
+            inst.lastWindowStart = windowStart;
+        }
+    }
+
+    // Apply HP/LP display filter per-sample
+    float filtered = sample;
+    if (m_hpEnabled) filtered = inst.filterHP.processSample(filtered);
+    if (m_lpEnabled) filtered = inst.filterLP.processSample(filtered);
+
+    // Write at PPQ-mapped position and mark affected buckets dirty
+    const auto range = inst.buffer.write(filtered, ppq);
+    if (range.from < range.to) {
+        inst.rmsBuckets.markDirty(range.from, range.to);
+        inst.cancelBuckets.markDirty(range.from, range.to);
+    }
+}
+
+void ScopeDisplay::writeLocalSample(float sample, double ppq) {
+    applyFilterAndWrite(m_instances[0], sample, ppq);
+    m_rmsOverlayDirty    = true;
+    m_cancelOverlayDirty = true;
+}
+
+void ScopeDisplay::writeRemotePackets(
+    const std::vector<SampleBroadcaster::RemoteRawPacket>& packets,
+    const std::vector<phu::network::RemoteInstanceInfo>&   infos)
+{
+    // Update identity info map
     m_remoteInfoMap.clear();
     for (const auto& info : infos)
         m_remoteInfoMap[info.instanceID] = info;
-}
 
-void ScopeDisplay::setRemoteRawData(
-    const std::vector<SampleBroadcaster::RemoteRawPacket>& remoteData) {
-
-    const double receiverRange = m_displayRangeBeats > 0.0 ? m_displayRangeBeats : 1.0;
-
-    // Invalidate all accum buffers when the receiver's display range changes
-    if (receiverRange != m_lastAccumReceiverRange) {
-        m_remoteAccumBuffers.clear();
-        m_lastAccumReceiverRange = receiverRange;
+    // Deactivate slots for instances that are no longer in the packet set.
+    // Skip when packets is empty (receive toggled off) — clearRemoteInstances() handles that.
+    if (!packets.empty()) {
+        for (int i = 1; i < MAX_INSTANCES; ++i) {
+            if (!m_instances[i].active) continue;
+            bool found = false;
+            for (const auto& pkt : packets)
+                if (pkt.instanceID == m_instances[i].instanceID) { found = true; break; }
+            if (!found) {
+                m_remoteSlotMap.erase(m_instances[i].instanceID);
+                m_instances[i].active     = false;
+                m_instances[i].instanceID = 0;
+                m_instances[i].hasSeq     = false;
+                m_instances[i].displayBins.assign(DISPLAY_BINS, 0.0f);
+                m_instances[i].rmsValues.clear();
+            }
+        }
     }
 
-    for (const auto& pkt : remoteData) {
+    // Process each packet
+    for (const auto& pkt : packets) {
         if (pkt.numSamples == 0) continue;
 
-        auto& accum = m_remoteAccumBuffers[pkt.instanceID];
+        // Find or allocate a slot
+        int slotIdx = -1;
+        auto it = m_remoteSlotMap.find(pkt.instanceID);
+        if (it != m_remoteSlotMap.end()) {
+            slotIdx = it->second;
+        } else {
+            for (int i = 1; i < MAX_INSTANCES; ++i) {
+                if (!m_instances[i].active) {
+                    slotIdx = i;
+                    m_instances[i].active     = true;
+                    m_instances[i].instanceID = pkt.instanceID;
+                    m_instances[i].hasSeq     = false;
+                    m_remoteSlotMap[pkt.instanceID] = i;
+                    prepareInstance(m_instances[i]);
+                    break;
+                }
+            }
+            if (slotIdx == -1) continue; // Max instances reached; discard
+        }
 
-        // Ensure display bins are allocated
-        if (static_cast<int>(accum.bins.size()) != REMOTE_ACCUM_BINS)
-            accum.bins.assign(static_cast<size_t>(REMOTE_ACCUM_BINS), 0.0f);
+        auto& inst = m_instances[slotIdx];
 
-        // Skip packets we have already processed (deduplication via sequence number).
-        // At 30 Hz send / 60 Hz read, the same packet may be returned twice by
-        // getReceivedPackets(). Duplicate processing would double-count RMS sums.
-        if (accum.hasSeq && pkt.sequenceNumber == accum.lastSeqNum)
-            continue;
-        accum.lastSeqNum = pkt.sequenceNumber;
-        accum.hasSeq     = true;
+        // Sequence deduplication: skip packets we have already processed
+        if (inst.hasSeq && pkt.sequenceNumber == inst.lastSeqNum) continue;
+        inst.lastSeqNum = pkt.sequenceNumber;
+        inst.hasSeq     = true;
 
-        // PPQ advance per sample: use the sender's sample rate from CtrlBroadcaster
-        // info if available; fall back to the receiver's sample rate otherwise.
+        // Reconstruct per-sample PPQ using sender's BPM and (preferably) sender's sample rate
         const double bpm = pkt.bpm > 0.0 ? pkt.bpm : 120.0;
-        double effectiveSampleRate = m_sampleRate > 0.0 ? m_sampleRate : 44100.0;
+        double remoteSr  = m_sampleRate > 0.0 ? m_sampleRate : 44100.0;
         {
             auto infoIt = m_remoteInfoMap.find(pkt.instanceID);
             if (infoIt != m_remoteInfoMap.end() && infoIt->second.sampleRate > 0.0)
-                effectiveSampleRate = infoIt->second.sampleRate;
+                remoteSr = infoIt->second.sampleRate;
         }
-        const double ppqPerSample = bpm / (60.0 * effectiveSampleRate);
+        const double ppqPerSample = bpm / (60.0 * remoteSr);
 
-        // Number of active RMS slots for the current display range — must match
-        // computeMetrics() / drawRmsOverlay() so accumulation and read-back use
-        // the same slot granularity (normPos × numRmsSlots maps into 0..numRmsSlots-1).
-        const int numRmsSlots = juce::jlimit(1, MAX_METRIC_SLOTS,
-                                             (int)std::round(m_displayRangeBeats * 16.0));
-
-        // Detect receiver-space cycle boundary from the first sample's PPQ.
-        // On a new cycle, clear all accum arrays so stale data from the previous
-        // cycle does not corrupt RMS/cancellation metrics.
-        const double firstPpq      = pkt.ppqOfFirstSample;
-        const double windowStart   = std::floor(firstPpq / receiverRange) * receiverRange;
-
-        if (std::abs(windowStart - accum.lastWindowStart) > 1e-9) {
-            // Do NOT clear display bins — they use last-write-wins semantics
-            // and will be naturally overwritten as new packets arrive.
-            // Only clear the additive RMS/cancellation metric accumulators.
-            std::fill(std::begin(accum.rmsAccum),    std::end(accum.rmsAccum),    0.0f);
-            std::fill(std::begin(accum.rmsCount),    std::end(accum.rmsCount),    0);
-            std::fill(std::begin(accum.cancelAccum), std::end(accum.cancelAccum), 0.0f);
-            std::fill(std::begin(accum.cancelCount), std::end(accum.cancelCount), 0);
-            accum.lastWindowStart = windowStart;
-        }
-
-        // Scatter-write each sample into the receiver's coordinate space
         for (int i = 0; i < static_cast<int>(pkt.numSamples); ++i) {
-            const double ppq_i  = firstPpq + static_cast<double>(i) * ppqPerSample;
-            double normPos      = std::fmod(ppq_i, receiverRange) / receiverRange;
-            if (normPos < 0.0) normPos += 1.0;
-
-            const float s = pkt.samples[i];
-
-            // Waveform display bin (last-write-wins)
-            const int bin = static_cast<int>(normPos * REMOTE_ACCUM_BINS);
-            if (bin >= 0 && bin < REMOTE_ACCUM_BINS)
-                accum.bins[static_cast<size_t>(bin)] = s;
-
-            // RMS accumulation: slot index uses numRmsSlots (= displayRangeBeats × 16)
-            // so it matches the slot granularity that computeMetrics() reads back.
-            const int rmsSlot = static_cast<int>(normPos * numRmsSlots);
-            if (rmsSlot >= 0 && rmsSlot < numRmsSlots) {
-                accum.rmsAccum[rmsSlot] += s * s;
-                accum.rmsCount[rmsSlot]++;
-            }
-
-            // Cancellation accumulation (fine-grained slots)
-            const int cancelSlot = static_cast<int>(normPos * MAX_CANCEL_SLOTS);
-            if (cancelSlot >= 0 && cancelSlot < MAX_CANCEL_SLOTS) {
-                accum.cancelAccum[cancelSlot] += s * s;
-                accum.cancelCount[cancelSlot]++;
-            }
-        }
-    }
-
-    // Prune accum buffers for instances that have gone stale (disappeared from
-    // the received set). Only prune when remoteData is non-empty so toggling
-    // "Show Remote" off (which passes an empty vector) doesn't discard state.
-    if (!remoteData.empty()) {
-        auto it = m_remoteAccumBuffers.begin();
-        while (it != m_remoteAccumBuffers.end()) {
-            bool found = false;
-            for (const auto& r : remoteData)
-                if (r.instanceID == it->first) { found = true; break; }
-            it = found ? std::next(it) : m_remoteAccumBuffers.erase(it);
+            const double ppq = pkt.ppqOfFirstSample + static_cast<double>(i) * ppqPerSample;
+            applyFilterAndWrite(inst, pkt.samples[i], ppq);
         }
     }
 
     m_rmsOverlayDirty    = true;
     m_cancelOverlayDirty = true;
+}
+
+void ScopeDisplay::clearRemoteInstances() {
+    for (int i = 1; i < MAX_INSTANCES; ++i) {
+        m_instances[i].active     = false;
+        m_instances[i].instanceID = 0;
+        m_instances[i].hasSeq     = false;
+        m_instances[i].displayBins.assign(DISPLAY_BINS, 0.0f);
+        m_instances[i].rmsValues.clear();
+    }
+    m_remoteSlotMap.clear();
+    m_remoteInfoMap.clear();
+    m_rmsOverlayDirty    = true;
+    m_cancelOverlayDirty = true;
+}
+
+// ============================================================================
+// Frame Computation
+// ============================================================================
+
+void ScopeDisplay::computeFrame() {
+    recomputeRms();
+    recomputeCancellation();
+    for (auto& inst : m_instances)
+        if (inst.active)
+            scatterInstance(inst);
+}
+
+void ScopeDisplay::scatterInstance(InstanceSlot& inst) {
+    const int N = inst.buffer.size();
+    if (N <= 0) return;
+    if (static_cast<int>(inst.displayBins.size()) != DISPLAY_BINS)
+        inst.displayBins.assign(DISPLAY_BINS, 0.0f);
+
+    const float* raw = inst.buffer.data();
+    for (int i = 0; i < N; ++i) {
+        const int bin = i * DISPLAY_BINS / N;
+        if (bin >= 0 && bin < DISPLAY_BINS)
+            inst.displayBins[static_cast<size_t>(bin)] = raw[i];
+    }
+}
+
+void ScopeDisplay::recomputeRms() {
+    std::fill(std::begin(m_rmsLocal), std::end(m_rmsLocal), 0.0f);
+    std::fill(std::begin(m_rmsSum),   std::end(m_rmsSum),   0.0f);
+    m_numActiveRmsBuckets = 0;
+
+    // Determine bucket count from the first active instance
+    for (const auto& inst : m_instances) {
+        if (inst.active && inst.rmsBuckets.bucketCount() > 0) {
+            m_numActiveRmsBuckets = inst.rmsBuckets.bucketCount();
+            break;
+        }
+    }
+    if (m_numActiveRmsBuckets == 0) return;
+
+    // Recompute dirty RMS buckets for each instance independently
+    for (auto& inst : m_instances) {
+        if (!inst.active) continue;
+        const int numBuckets = inst.rmsBuckets.bucketCount();
+        if (numBuckets == 0) continue;
+
+        if (static_cast<int>(inst.rmsValues.size()) != numBuckets)
+            inst.rmsValues.assign(static_cast<size_t>(numBuckets), 0.0f);
+
+        const float* raw = inst.buffer.data();
+        const int    N   = inst.buffer.size();
+
+        for (int bi = 0; bi < numBuckets; ++bi) {
+            auto& b = inst.rmsBuckets.bucket(bi);
+            if (!b.dirty) continue;
+
+            const int start = b.startIdx;
+            const int end   = juce::jmin(b.endIdx, N);
+            const int count = end - start;
+            if (count <= 0) { b.dirty = false; continue; }
+
+            float sumSq = 0.0f;
+            for (int i = start; i < end; ++i)
+                sumSq += raw[i] * raw[i];
+            inst.rmsValues[static_cast<size_t>(bi)] =
+                std::sqrt(sumSq / static_cast<float>(count));
+            b.dirty = false;
+        }
+    }
+
+    // Sum per-instance RMS values into m_rmsLocal and m_rmsSum
+    const int numOut = juce::jmin(m_numActiveRmsBuckets, MAX_METRIC_SLOTS);
+    for (int s = 0; s < numOut; ++s) {
+        float sum = 0.0f;
+        for (int ii = 0; ii < MAX_INSTANCES; ++ii) {
+            const auto& inst = m_instances[ii];
+            if (!inst.active) continue;
+            if (s >= static_cast<int>(inst.rmsValues.size())) continue;
+            const float rms = inst.rmsValues[static_cast<size_t>(s)];
+            if (ii == 0) m_rmsLocal[s] = rms;
+            sum += rms;
+        }
+        m_rmsSum[s] = sum;
+    }
+}
+
+void ScopeDisplay::recomputeCancellation() {
+    std::fill(std::begin(m_cancellationIndex), std::end(m_cancellationIndex), 0.0f);
+    m_numActiveCancelBuckets = 0;
+
+    // Need at least 2 active instances for cancellation to be meaningful
+    int numActive = 0;
+    for (const auto& inst : m_instances)
+        if (inst.active) ++numActive;
+    if (numActive < 2) return;
+
+    // Get bucket count from the first active instance
+    int numBuckets = 0;
+    const InstanceSlot* refInst = nullptr;
+    for (const auto& inst : m_instances) {
+        if (inst.active && inst.cancelBuckets.bucketCount() > 0) {
+            numBuckets = inst.cancelBuckets.bucketCount();
+            refInst    = &inst;
+            break;
+        }
+    }
+    if (numBuckets == 0 || refInst == nullptr) return;
+    m_numActiveCancelBuckets = juce::jmin(numBuckets, MAX_CANCEL_SLOTS);
+
+    for (int bi = 0; bi < m_numActiveCancelBuckets; ++bi) {
+        // Check whether any active instance has this bucket dirty
+        bool dirty = false;
+        for (const auto& inst : m_instances) {
+            if (inst.active && bi < inst.cancelBuckets.bucketCount() &&
+                inst.cancelBuckets.bucket(bi).dirty) {
+                dirty = true;
+                break;
+            }
+        }
+        if (!dirty) continue;
+
+        const auto& refBucket = refInst->cancelBuckets.bucket(bi);
+        const int start = refBucket.startIdx;
+        const int end   = refBucket.endIdx;
+        const int count = end - start;
+        if (count <= 0) continue;
+
+        // Clamp loop end to the minimum buffer size across all active instances.
+        // All instances are normally prepared with the same parameters (same N),
+        // but a newly activated remote instance may have a slightly different size
+        // if BPM or sample rate changed between prepare() calls.
+        int safeEnd = end;
+        for (const auto& inst : m_instances)
+            if (inst.active)
+                safeEnd = juce::jmin(safeEnd, inst.buffer.size());
+        if (safeEnd <= start) continue;
+        const int safeCount = safeEnd - start;
+
+        // Denominator: sum of individual per-instance RMSes over this range
+        float D = 0.0f;
+        for (const auto& inst : m_instances) {
+            if (!inst.active) continue;
+            const float* raw = inst.buffer.data();
+            float sumSq = 0.0f;
+            for (int i = start; i < safeEnd; ++i)
+                sumSq += raw[i] * raw[i];
+            D += std::sqrt(sumSq / static_cast<float>(safeCount));
+        }
+
+        if (D <= 1e-4f) {
+            // Below noise floor — mark clean and skip
+            for (auto& inst : m_instances)
+                if (inst.active && bi < inst.cancelBuckets.bucketCount())
+                    inst.cancelBuckets.bucket(bi).dirty = false;
+            continue;
+        }
+
+        // Numerator: RMS of the summed waveform over the same range
+        float sumSqSum = 0.0f;
+        for (int i = start; i < safeEnd; ++i) {
+            float v = 0.0f;
+            for (const auto& inst : m_instances) {
+                if (!inst.active) continue;
+                v += inst.buffer.data()[i];
+            }
+            sumSqSum += v * v;
+        }
+        const float N_val = std::sqrt(sumSqSum / static_cast<float>(safeCount));
+
+        const float ci = juce::jlimit(0.0f, 1.0f, 1.0f - N_val / D);
+        constexpr float D_REF = 0.1f;
+        const float levelWeight = std::sqrt(juce::jlimit(0.0f, 1.0f, D / D_REF));
+        m_cancellationIndex[bi] = ci * levelWeight;
+
+        // Mark all instances' cancel bucket clean
+        for (auto& inst : m_instances)
+            if (inst.active && bi < inst.cancelBuckets.bucketCount())
+                inst.cancelBuckets.bucket(bi).dirty = false;
+    }
 }
 
 // ============================================================================
@@ -146,10 +396,10 @@ void ScopeDisplay::paint(juce::Graphics& g) {
     // Grid lines
     drawGrid(g, bounds);
 
-    // Analysis overlays — compute metrics and rebuild cached images when needed,
-    // then blit in a single drawImageAt call each repaint.
-    if (m_showRms || m_showCancellation)
-        computeMetrics();
+    // Determine whether any remote instance is active
+    bool hasActiveRemotes = false;
+    for (int i = 1; i < MAX_INSTANCES; ++i)
+        if (m_instances[i].active) { hasActiveRemotes = true; break; }
 
     // Invalidate overlay images when the display area changes
     const int w = static_cast<int>(bounds.getWidth());
@@ -173,7 +423,8 @@ void ScopeDisplay::paint(juce::Graphics& g) {
                       static_cast<int>(bounds.getX()),
                       static_cast<int>(bounds.getY()));
     }
-    if (m_showCancellation && !m_remoteAccumBuffers.empty()) {
+
+    if (m_showCancellation && hasActiveRemotes) {
         if (m_cancelOverlayDirty) {
             m_cancelOverlayImage = juce::Image(
                 juce::Image::ARGB, juce::jmax(1, w), juce::jmax(1, h), true);
@@ -187,46 +438,46 @@ void ScopeDisplay::paint(juce::Graphics& g) {
     }
 
     // Remote waveforms (drawn first, underneath local)
-    if (m_showRemote && !m_remoteAccumBuffers.empty()) {
+    if (m_showRemote && hasActiveRemotes) {
         int colourIdx = 0;
-        for (const auto& kv : m_remoteAccumBuffers) {
-            if (!kv.second.bins.empty()) {
-                // Use colour from CtrlBroadcaster info if available; fall back to palette
-                juce::Colour colour;
-                juce::String label;
-                auto infoIt = m_remoteInfoMap.find(kv.first);
-                if (infoIt != m_remoteInfoMap.end()) {
-                    const auto& info = infoIt->second;
-                    colour = juce::Colour(info.colourRGBA[0], info.colourRGBA[1],
-                                         info.colourRGBA[2], info.colourRGBA[3]);
-                    label = juce::String(info.channelLabel);
-                } else {
-                    colour = getRemoteColour(colourIdx);
-                }
+        for (int i = 1; i < MAX_INSTANCES; ++i) {
+            const auto& inst = m_instances[i];
+            if (!inst.active || inst.displayBins.empty()) { ++colourIdx; continue; }
 
-                drawWaveform(g, bounds, kv.second.bins.data(),
-                             static_cast<int>(kv.second.bins.size()),
-                             colour, 0.5f);
+            juce::Colour colour;
+            juce::String label;
+            auto infoIt = m_remoteInfoMap.find(inst.instanceID);
+            if (infoIt != m_remoteInfoMap.end()) {
+                const auto& info = infoIt->second;
+                colour = juce::Colour(info.colourRGBA[0], info.colourRGBA[1],
+                                      info.colourRGBA[2], info.colourRGBA[3]);
+                label  = juce::String(info.channelLabel);
+            } else {
+                colour = getRemoteColour(colourIdx);
+            }
 
-                // Draw channel label as small text in the top-left area
-                if (label.isNotEmpty()) {
-                    g.setColour(colour.withAlpha(0.85f));
-                    g.setFont(juce::Font(juce::FontOptions(11.0f)));
-                    g.drawText(label,
-                               static_cast<int>(bounds.getX() + 4),
-                               static_cast<int>(bounds.getY() + 4 + colourIdx * 14),
-                               150, 13,
-                               juce::Justification::centredLeft, true);
-                }
+            drawWaveform(g, bounds, inst.displayBins.data(),
+                         static_cast<int>(inst.displayBins.size()),
+                         colour, 0.5f);
+
+            if (label.isNotEmpty()) {
+                g.setColour(colour.withAlpha(0.85f));
+                g.setFont(juce::Font(juce::FontOptions(11.0f)));
+                g.drawText(label,
+                           static_cast<int>(bounds.getX() + 4),
+                           static_cast<int>(bounds.getY() + 4 + colourIdx * 14),
+                           150, 13,
+                           juce::Justification::centredLeft, true);
             }
             ++colourIdx;
         }
     }
 
     // Local waveform (on top)
-    if (m_showLocal && !m_localData.empty()) {
-        drawWaveform(g, bounds, m_localData.data(),
-                     static_cast<int>(m_localData.size()),
+    if (m_showLocal && !m_instances[0].displayBins.empty()) {
+        drawWaveform(g, bounds,
+                     m_instances[0].displayBins.data(),
+                     static_cast<int>(m_instances[0].displayBins.size()),
                      m_localColour, 1.0f);
     }
 
@@ -285,10 +536,6 @@ void ScopeDisplay::drawWaveform(juce::Graphics& g, juce::Rectangle<float> area,
                                 juce::Colour colour, float alpha) {
     if (numBins < 2) return;
 
-    // Decimate to screen pixel width: draw at most one point per pixel column.
-    // When multiple bins map to the same pixel, take the min/max pair and draw
-    // a vertical line segment — this preserves sharp transients at all zoom levels
-    // without aliasing, while reducing path operations from O(numBins) to O(width).
     const int screenW = juce::jmax(2, static_cast<int>(area.getWidth()));
     juce::Path path;
     bool started = false;
@@ -296,25 +543,22 @@ void ScopeDisplay::drawWaveform(juce::Graphics& g, juce::Rectangle<float> area,
     for (int px = 0; px < screenW; ++px) {
         const float x = area.getX() + static_cast<float>(px);
 
-        // Map pixel column to bin range [binStart, binEnd)
         const int binStart = px       * numBins / screenW;
         const int binEnd   = (px + 1) * numBins / screenW;
 
         if (binStart >= numBins) break;
 
         if (binEnd <= binStart + 1) {
-            // One bin per pixel: simple line-to
             const float y = sampleToY(data[binStart], area.getY(), area.getHeight());
             if (!started) { path.startNewSubPath(x, y); started = true; }
             else            path.lineTo(x, y);
         } else {
-            // Multiple bins per pixel: find min/max for vertical stroke
             float minV = data[binStart], maxV = data[binStart];
             for (int b = binStart + 1; b < binEnd && b < numBins; ++b) {
                 if (data[b] < minV) minV = data[b];
                 if (data[b] > maxV) maxV = data[b];
             }
-            const float yMax = sampleToY(maxV, area.getY(), area.getHeight()); // larger amp = smaller y
+            const float yMax = sampleToY(maxV, area.getY(), area.getHeight());
             const float yMin = sampleToY(minV, area.getY(), area.getHeight());
 
             if (!started) { path.startNewSubPath(x, yMax); started = true; }
@@ -328,158 +572,51 @@ void ScopeDisplay::drawWaveform(juce::Graphics& g, juce::Rectangle<float> area,
 }
 
 // ============================================================================
-// Analysis Metrics (RMS + Inter-Instance Cancellation)
+// RMS Overlay
 // ============================================================================
 
-void ScopeDisplay::computeMetrics() {
-    const int numRmsSlots = juce::jlimit(1, MAX_METRIC_SLOTS,
-                                         (int)std::round(m_displayRangeBeats * 16.0));
-
-    for (int s = 0; s < MAX_METRIC_SLOTS; ++s) {
-        m_rmsLocal[s] = 0.0f;
-        m_rmsSum[s]   = 0.0f;
-    }
-    for (int s = 0; s < MAX_CANCEL_SLOTS; ++s)
-        m_cancellationIndex[s] = 0.0f;
-
-    const int  localBins  = (int)m_localData.size();
-    const int  numRemotes = (int)m_remoteAccumBuffers.size();
-    const bool doCancel   = m_showCancellation && !m_remoteAccumBuffers.empty();
-
-    // Collect pointers to remote display bins (used for cancellation numerator)
-    m_metricRemotePtrs.clear();
-    m_metricRemoteSizes.clear();
-    m_metricRemotePtrs.reserve(static_cast<size_t>(numRemotes));
-    m_metricRemoteSizes.reserve(static_cast<size_t>(numRemotes));
-    for (const auto& kv : m_remoteAccumBuffers) {
-        m_metricRemotePtrs.push_back(kv.second.bins.data());
-        m_metricRemoteSizes.push_back((int)kv.second.bins.size());
-    }
-
-    // ---- RMS per 1/16-beat slot ----
-    // rmsLocal[s]  = sqrt( mean(local_bins²) ) over the slot window
-    // rmsRemote[s] = sqrt( rmsAccum[id][s] / rmsCount[id][s] ) per remote id
-    // rmsSum[s]    = rmsLocal[s] + Σ_id rmsRemote[id][s]   (sum of individual RMSes)
-    for (int s = 0; s < numRmsSlots; ++s) {
-        const int wStart = s       * REMOTE_ACCUM_BINS / numRmsSlots;
-        const int wEnd   = (s + 1) * REMOTE_ACCUM_BINS / numRmsSlots;
-        const int wCount = wEnd - wStart;
-        if (wCount <= 0) continue;
-
-        float sumSqLocal = 0.0f;
-        for (int b = wStart; b < wEnd; ++b) {
-            const int   lb = localBins > 0 ? b * localBins / REMOTE_ACCUM_BINS : 0;
-            const float lv = (localBins > 0 && lb < localBins)
-                                 ? m_localData[static_cast<size_t>(lb)] : 0.0f;
-            sumSqLocal += lv * lv;
-        }
-        m_rmsLocal[s] = std::sqrt(sumSqLocal / static_cast<float>(wCount));
-
-        float rmsSum = m_rmsLocal[s];
-        for (const auto& kv : m_remoteAccumBuffers) {
-            const float* ra = kv.second.rmsAccum;
-            const int*   rc = kv.second.rmsCount;
-            rmsSum += (rc[s] > 0) ? std::sqrt(ra[s] / static_cast<float>(rc[s])) : 0.0f;
-        }
-        m_rmsSum[s] = rmsSum;
-    }
-
-    // ---- Cancellation: fine-grained windows (~4ms each at 4-beat display) ----
-    // Denominator D[s] = rmsLocal[s] + Σ_id sqrt(cancelAccum[id][s] / cancelCount[id][s])
-    // Numerator   N[s] = RMS of (local_bins + Σ_id remote_bins) over the cancel slot window
-    // CI[s] = 1 - N[s] / D[s], level-weighted
-    if (doCancel) {
-        for (int s = 0; s < MAX_CANCEL_SLOTS; ++s) {
-            const int wStart = s       * REMOTE_ACCUM_BINS / MAX_CANCEL_SLOTS;
-            const int wEnd   = (s + 1) * REMOTE_ACCUM_BINS / MAX_CANCEL_SLOTS;
-            const int wCount = wEnd - wStart;
-            if (wCount <= 0) continue;
-
-            // Denominator: sum of individual per-slot RMSes from dedicated accum
-            float sumSqLocal = 0.0f;
-            for (int b = wStart; b < wEnd; ++b) {
-                const int   lb = localBins > 0 ? b * localBins / REMOTE_ACCUM_BINS : 0;
-                const float lv = (localBins > 0 && lb < localBins)
-                                     ? m_localData[static_cast<size_t>(lb)] : 0.0f;
-                sumSqLocal += lv * lv;
-            }
-            float D = std::sqrt(sumSqLocal / static_cast<float>(wCount));
-            for (const auto& kv : m_remoteAccumBuffers) {
-                const float* ca = kv.second.cancelAccum;
-                const int*   cc = kv.second.cancelCount;
-                D += (cc[s] > 0) ? std::sqrt(ca[s] / static_cast<float>(cc[s])) : 0.0f;
-            }
-
-            // Numerator: RMS of summed waveform over the cancel slot window
-            float sumSqSum = 0.0f;
-            for (int b = wStart; b < wEnd; ++b) {
-                const int   lb = localBins > 0 ? b * localBins / REMOTE_ACCUM_BINS : 0;
-                const float lv = (localBins > 0 && lb < localBins)
-                                     ? m_localData[static_cast<size_t>(lb)] : 0.0f;
-                float sumVal = lv;
-                for (int ri = 0; ri < numRemotes; ++ri) {
-                    const float rv = (b < m_metricRemoteSizes[ri])
-                                         ? m_metricRemotePtrs[ri][b] : 0.0f;
-                    sumVal += rv;
-                }
-                sumSqSum += sumVal * sumVal;
-            }
-            const float N = std::sqrt(sumSqSum / static_cast<float>(wCount));
-
-            // Noise floor at ~-100 dBFS
-            if (D > 1e-4f) {
-                const float ci = juce::jlimit(0.0f, 1.0f, 1.0f - N / D);
-
-                // Level-weighted CI: cancellation is only meaningful when signal is present.
-                // Weight rises as sqrt(D / D_ref), clamped to 1 above D_ref = 0.1 (-20 dBFS).
-                constexpr float D_REF = 0.1f;
-                const float levelWeight = std::sqrt(
-                    juce::jlimit(0.0f, 1.0f, D / D_REF));
-                m_cancellationIndex[s] = ci * levelWeight;
-            }
-        }
-    }
-}
-
 void ScopeDisplay::drawRmsOverlay(juce::Graphics& g, juce::Rectangle<float> area) {
-    const int   numSlots = juce::jlimit(1, MAX_METRIC_SLOTS,
-                                        (int)std::round(m_displayRangeBeats * 16.0));
-    const float slotW = area.getWidth() / static_cast<float>(numSlots);
+    const int numSlots = juce::jmax(1, m_numActiveRmsBuckets);
+    const float slotW  = area.getWidth() / static_cast<float>(numSlots);
 
-    // When remote display is off, show only local RMS so the line never reflects
-    // hidden data. When remote is on, show the combined sum RMS.
-    const bool useSum = m_showRemote && !m_remoteAccumBuffers.empty();
+    // When remote display is off, show only local RMS.
+    // When remote is on and there are active remotes, show the combined sum.
+    bool hasActiveRemotes = false;
+    for (int i = 1; i < MAX_INSTANCES; ++i)
+        if (m_instances[i].active) { hasActiveRemotes = true; break; }
+    const bool useSum = m_showRemote && hasActiveRemotes;
 
-    for (int s = 0; s < numSlots; ++s) {
+    for (int s = 0; s < numSlots && s < MAX_METRIC_SLOTS; ++s) {
         const float rms = useSum ? m_rmsSum[s] : m_rmsLocal[s];
-        if (rms < 1e-6f) continue; // skip only truly silent bins (~-120 dBFS)
+        if (rms < 1e-6f) continue;
 
-        const float x0  = area.getX() + static_cast<float>(s)     * slotW;
-        const float w   = slotW;
+        const float x0    = area.getX() + static_cast<float>(s) * slotW;
         const float lineY = sampleToY(rms, area.getY(), area.getHeight());
 
-        // Layered glow: outer halo → inner glow → bright core  (blue-white palette)
-        g.setColour(juce::Colour(0x1A44AAFF)); // outer halo, 5px spread
-        g.fillRect(x0, lineY - 2.5f, w, 5.0f);
+        g.setColour(juce::Colour(0x1A44AAFF));
+        g.fillRect(x0, lineY - 2.5f, slotW, 5.0f);
 
-        g.setColour(juce::Colour(0x5566CCFF)); // inner glow, 3px
-        g.fillRect(x0, lineY - 1.5f, w, 3.0f);
+        g.setColour(juce::Colour(0x5566CCFF));
+        g.fillRect(x0, lineY - 1.5f, slotW, 3.0f);
 
-        g.setColour(juce::Colour(0xEEAAEEFF)); // bright core, 2px (ice-blue/white)
-        g.fillRect(x0, lineY - 0.5f, w, 2.0f);
+        g.setColour(juce::Colour(0xEEAAEEFF));
+        g.fillRect(x0, lineY - 0.5f, slotW, 2.0f);
     }
 }
 
-void ScopeDisplay::drawCancellationOverlay(juce::Graphics& g, juce::Rectangle<float> area) {
-    const int   numSlots = MAX_CANCEL_SLOTS;  // fine-grained, constant 256 windows
-    const float slotW = area.getWidth() / static_cast<float>(numSlots);
-    constexpr float barH = 6.0f;
-    const float barY = area.getBottom() - barH;
+// ============================================================================
+// Cancellation Overlay
+// ============================================================================
 
-    for (int s = 0; s < numSlots; ++s) {
+void ScopeDisplay::drawCancellationOverlay(juce::Graphics& g, juce::Rectangle<float> area) {
+    const int   numSlots = juce::jmax(1, m_numActiveCancelBuckets);
+    const float slotW    = area.getWidth() / static_cast<float>(numSlots);
+    constexpr float barH = 6.0f;
+    const float barY     = area.getBottom() - barH;
+
+    for (int s = 0; s < numSlots && s < MAX_CANCEL_SLOTS; ++s) {
         const float ci = m_cancellationIndex[s];
 
-        // Colour: green (0) → yellow (0.4) → red (1.0)
         juce::Colour col;
         if (ci < 0.4f)
             col = juce::Colour(0xFF00BB55)
@@ -514,15 +651,13 @@ void ScopeDisplay::drawPlayhead(juce::Graphics& g, juce::Rectangle<float> area) 
 // ============================================================================
 
 float ScopeDisplay::sampleToY(float sample, float top, float height) const {
-    // Apply visual Y-scale then map [-1, +1] to [bottom, top]: +1 at top, -1 at bottom
     const float scaled = juce::jlimit(-1.0f, 1.0f, sample * m_amplitudeScale);
-    float normalized = (scaled + 1.0f) * 0.5f; // [-1,+1] → [0,1]
+    float normalized = (scaled + 1.0f) * 0.5f;
     normalized = juce::jlimit(0.0f, 1.0f, normalized);
     return top + (1.0f - normalized) * height;
 }
 
 juce::Colour ScopeDisplay::getRemoteColour(int index) {
-    // Colour palette for remote instances
     static const juce::Colour colours[] = {
         juce::Colour(0xFFFF6B6B), // Red
         juce::Colour(0xFF4ECDC4), // Teal

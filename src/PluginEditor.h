@@ -2,7 +2,6 @@
 
 #include "DisplayFilterStrip.h"
 #include "ScopeDisplay.h"
-#include "../lib/LinkwitzRileyFilter.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <vector>
 
@@ -72,15 +71,14 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     juce::Slider       amplitudeSlider;    // Y-scale leveler [0.5, 4.0], double-click resets to 1.0
     juce::Label        amplitudeLabel;
 
-    // Display filter DSP (GUI thread only — never touched by audio thread)
-    LinkwitzRiley::LinkwitzRileyFilter<float> m_displayHP;
-    LinkwitzRiley::LinkwitzRileyFilter<float> m_displayLP;
-    double m_lastSampleRate = 0.0;
-    float  m_lastHpFreq = -1.0f;
-    float  m_lastLpFreq = -1.0f;
-
-    // Working buffer for display filter application (persistent to avoid per-tick allocation)
-    std::vector<float> m_displayWorkBuf;
+    // Display filter DSP parameters (GUI thread only — filter state now lives in ScopeDisplay)
+    double m_lastSampleRate  = 0.0;
+    float  m_lastHpFreq      = -1.0f;
+    float  m_lastLpFreq      = -1.0f;
+    bool   m_lastHpEnabled   = false;
+    bool   m_lastLpEnabled   = false;
+    double m_lastBpm         = -1.0;
+    double m_lastDisplayRangeBeats = -1.0;
 
     // Persistent cache for remote raw packets — reused each frame to avoid heap allocation
     std::vector<SampleBroadcaster::RemoteRawPacket> m_remoteDataCache;

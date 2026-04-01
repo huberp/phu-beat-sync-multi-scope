@@ -374,81 +374,82 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
         syncUIFromProcessorState();
         m_needsStateSync = false;
     }
-    auto& syncBuf = audioProcessor.getInputSyncBuffer();
-    if (syncBuf.size() > 0) {
-        // --- Update filter coefficients if sample rate or frequency changed ---
-        const double sampleRate = audioProcessor.getSampleRate();
 
-        if (sampleRate > 0.0) {
-            const bool srChanged = (sampleRate != m_lastSampleRate);
-            const float hpFreqNow = m_pHpFreq->load(std::memory_order_relaxed);
-            const float lpFreqNow = m_pLpFreq->load(std::memory_order_relaxed);
-            if (srChanged || hpFreqNow != m_lastHpFreq) {
-                m_displayHP.setParams(LinkwitzRiley::FilterType::HighPass,
-                                      LinkwitzRiley::Slope::DB48,
-                                      hpFreqNow, static_cast<float>(sampleRate));
-                m_displayHP.reset();
-                m_lastHpFreq = hpFreqNow;
-            }
-            if (srChanged || lpFreqNow != m_lastLpFreq) {
-                m_displayLP.setParams(LinkwitzRiley::FilterType::LowPass,
-                                      LinkwitzRiley::Slope::DB48,
-                                      lpFreqNow, static_cast<float>(sampleRate));
-                m_displayLP.reset();
-                m_lastLpFreq = lpFreqNow;
-            }
-            m_lastSampleRate = sampleRate;
+    const double sampleRate   = audioProcessor.getSampleRate();
+    const double bpm          = audioProcessor.getSyncGlobals().getBPM();
+    const double displayBeats = audioProcessor.getDisplayRangeBeats();
+
+    // Read filter parameters from APVTS
+    const float hpFreqNow    = m_pHpFreq->load(std::memory_order_relaxed);
+    const float lpFreqNow    = m_pLpFreq->load(std::memory_order_relaxed);
+    const bool  hpEnabledNow = m_pHpEnabled->load(std::memory_order_relaxed) > 0.5f;
+    const bool  lpEnabledNow = m_pLpEnabled->load(std::memory_order_relaxed) > 0.5f;
+
+    // --- Prepare pipeline when display parameters change ---
+    const bool pipelineParamsChanged = (bpm != m_lastBpm ||
+                                        sampleRate != m_lastSampleRate ||
+                                        displayBeats != m_lastDisplayRangeBeats);
+    if (pipelineParamsChanged && bpm > 0.0 && sampleRate > 0.0 && displayBeats > 0.0)
+        scopeDisplay.prepare(displayBeats, bpm, sampleRate);
+
+    // --- Update filter coefficients when they change ---
+    // Also update after prepare() since prepare() may reset filter state.
+    const bool filterParamsChanged = (hpFreqNow    != m_lastHpFreq    ||
+                                      lpFreqNow    != m_lastLpFreq    ||
+                                      hpEnabledNow != m_lastHpEnabled ||
+                                      lpEnabledNow != m_lastLpEnabled ||
+                                      sampleRate   != m_lastSampleRate);
+    if (filterParamsChanged && sampleRate > 0.0)
+        scopeDisplay.setFilterParams(hpEnabledNow, hpFreqNow,
+                                     lpEnabledNow, lpFreqNow,
+                                     sampleRate);
+
+    // Update tracking variables
+    m_lastSampleRate          = sampleRate;
+    m_lastBpm                 = bpm;
+    m_lastDisplayRangeBeats   = displayBeats;
+    m_lastHpFreq              = hpFreqNow;
+    m_lastLpFreq              = lpFreqNow;
+    m_lastHpEnabled           = hpEnabledNow;
+    m_lastLpEnabled           = lpEnabledNow;
+
+    // --- Drain local (monoSample, absolutePpq) SPSC ring → write to ScopeDisplay ---
+    {
+        auto& fifo          = audioProcessor.getLocalRingFifo();
+        const auto& samples = audioProcessor.getLocalRingSamples();
+        const auto& ppqs    = audioProcessor.getLocalRingPpqs();
+        const int numAvail  = fifo.getNumReady();
+        if (numAvail > 0) {
+            const auto scope = fifo.read(numAvail);
+            for (int i = 0; i < scope.blockSize1; ++i)
+                scopeDisplay.writeLocalSample(
+                    samples[static_cast<size_t>(scope.startIndex1 + i)],
+                    ppqs   [static_cast<size_t>(scope.startIndex1 + i)]);
+            for (int i = 0; i < scope.blockSize2; ++i)
+                scopeDisplay.writeLocalSample(
+                    samples[static_cast<size_t>(scope.startIndex2 + i)],
+                    ppqs   [static_cast<size_t>(scope.startIndex2 + i)]);
         }
-
-        // --- Copy sync buffer into a persistent working vector and apply display filters ---
-        const int numBins = static_cast<int>(syncBuf.size());
-        if (static_cast<int>(m_displayWorkBuf.size()) != numBins)
-            m_displayWorkBuf.resize(static_cast<size_t>(numBins));
-        std::copy(syncBuf.data(), syncBuf.data() + numBins, m_displayWorkBuf.begin());
-
-        const bool hpEnabled = m_pHpEnabled->load(std::memory_order_relaxed) > 0.5f;
-        const bool lpEnabled = m_pLpEnabled->load(std::memory_order_relaxed) > 0.5f;
-
-        if (hpEnabled) {
-            for (auto& s : m_displayWorkBuf)
-                s = m_displayHP.processSample(s);
-        }
-        if (lpEnabled) {
-            for (auto& s : m_displayWorkBuf)
-                s = m_displayLP.processSample(s);
-        }
-
-        // --- Pass filtered data to the scope display ---
-        scopeDisplay.setLocalData(m_displayWorkBuf.data(), static_cast<int>(m_displayWorkBuf.size()));
-
-        // Propagate sample rate to ScopeDisplay for per-sample PPQ reconstruction
-        if (sampleRate > 0.0)
-            scopeDisplay.setSampleRate(sampleRate);
-
     }
 
-    // Update PPQ position for playhead
+    // Update PPQ position for playhead and display range
     scopeDisplay.setCurrentPpq(audioProcessor.getSyncGlobals().getPpqEndOfBlock());
-    scopeDisplay.setDisplayRangeBeats(audioProcessor.getDisplayRangeBeats());
+    scopeDisplay.setDisplayRangeBeats(displayBeats);
 
     // Enforce BPM-aware display range constraints (grey out/auto-switch)
     updateDisplayRangeConstraints();
 
-    // Get remote data if enabled (network receive on UI thread, per requirement)
+    // --- Consume remote packets (network receive on UI thread, per requirement) ---
     if (remoteDisplayToggle.getToggleState()) {
-        // Fetch remote instance infos first so ScopeDisplay has current sampleRate,
-        // colour, and label before processing the raw sample packets.
         audioProcessor.getCtrlBroadcaster().getRemoteInfos(m_remoteInfosCache);
-        scopeDisplay.setRemoteInfos(m_remoteInfosCache);
-
-        // Use the persistent cache vector — reuses its capacity each frame,
-        // avoiding a heap allocation per 60 Hz tick.
         audioProcessor.getSampleBroadcaster().getReceivedPackets(m_remoteDataCache);
-        scopeDisplay.setRemoteRawData(m_remoteDataCache);
+        scopeDisplay.writeRemotePackets(m_remoteDataCache, m_remoteInfosCache);
     } else {
-        scopeDisplay.setRemoteInfos({});
-        scopeDisplay.setRemoteRawData({});
+        scopeDisplay.clearRemoteInstances();
     }
+
+    // --- Compute frame (dirty bucket recomputation + scatter to display bins) ---
+    scopeDisplay.computeFrame();
 
     // Repaint scope
     scopeDisplay.repaint();

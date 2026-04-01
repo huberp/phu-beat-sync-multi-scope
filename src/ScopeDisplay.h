@@ -1,77 +1,79 @@
 #pragma once
 
-#include "../lib/audio/BeatSyncBuffer.h"
+#include "../lib/audio/BucketSet.h"
+#include "../lib/audio/RawSampleBuffer.h"
+#include "../lib/LinkwitzRileyFilter.h"
 #include "../lib/network/CtrlBroadcaster.h"
 #include "../lib/network/SampleBroadcaster.h"
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <array>
 #include <map>
 #include <vector>
 
-using phu::audio::BeatSyncBuffer;
 using phu::network::SampleBroadcaster;
 
 /**
  * ScopeDisplay — beat-synced oscilloscope display component.
  *
- * Renders local BeatSyncBuffer data as a waveform trace indexed by musical position.
- * Also renders remote waveform data received via SampleBroadcaster, reconstructed
- * from raw sample packets using per-sample PPQ computation.
+ * Renders waveform data for up to 8 instances (1 local + 7 remotes) aligned to
+ * musical position.  Each instance's raw sample stream is written into a
+ * RawSampleBuffer (position-addressed overwrite ring), with the HP/LP display
+ * filter applied per-sample before the write.  BucketSet-driven dirty tracking
+ * ensures only changed regions are recomputed for the RMS and cancellation
+ * overlays.
  *
- * The display shows raw audio sample data mapped to pixel coordinates:
  * - X axis: musical position [0, 1) normalized within display range
  * - Y axis: sample amplitude [-1, +1] mapped to component height
  * - Playhead marker showing current PPQ position
  */
 class ScopeDisplay : public juce::Component {
   public:
+    /** Maximum concurrent instances (1 local + 7 remotes). */
+    static constexpr int MAX_INSTANCES = 8;
+    /** Number of display scatter bins per instance (last-write-wins, 4096). */
+    static constexpr int DISPLAY_BINS  = 4096;
+
     ScopeDisplay();
     ~ScopeDisplay() override = default;
 
     void paint(juce::Graphics& g) override;
 
-    /** Set local beat-synced waveform data for rendering (from BeatSyncBuffer). */
-    void setLocalData(const float* data, int numBins);
+    // -------------------------------------------------------------------------
+    // Configuration
+    // -------------------------------------------------------------------------
 
     /**
-     * Set remote raw sample packets received from other instances.
-     * Scatter-writes each sample into the receiver's coordinate space using
-     * per-sample PPQ reconstruction, and accumulates into RMS/cancellation
-     * metric buffers. sampleRate must be set via setSampleRate() first.
+     * Prepare the pipeline for new display parameters.
+     * Clears and resizes all RawSampleBuffers and BucketSets.
+     * Call whenever displayBeats, bpm, or sampleRate changes.
      */
-    void setRemoteRawData(const std::vector<SampleBroadcaster::RemoteRawPacket>& remoteData);
+    void prepare(double displayBeats, double bpm, double sampleRate);
 
     /**
-     * Set the latest RemoteInstanceInfo snapshot from CtrlBroadcaster.
-     * Used for per-instance sampleRate, channelLabel, and colourRGBA.
-     * Call this before setRemoteRawData() each frame so the infos are current.
+     * Update HP/LP display filter parameters (applied symmetrically to all
+     * active instances).  Resets all per-instance filter states.
+     * Call whenever filter enable/frequency or sample rate changes.
      */
-    void setRemoteInfos(const std::vector<phu::network::RemoteInstanceInfo>& infos);
-
-    /** Set the sample rate used for per-sample PPQ reconstruction. */
-    void setSampleRate(double sampleRate) { m_sampleRate = sampleRate; }
+    void setFilterParams(bool hpEnabled, float hpFreq,
+                         bool lpEnabled, float lpFreq,
+                         double sampleRate);
 
     /** Set the colour used for the local waveform trace. */
     void setLocalColour(juce::Colour colour) { m_localColour = colour; }
 
-    /** Enable or disable rendering of local data (toggle). */
+    /** Enable or disable rendering of local data. */
     void setLocalDisplayEnabled(bool enabled) { m_showLocal = enabled; }
     bool isLocalDisplayEnabled() const { return m_showLocal; }
 
-    /** Enable or disable rendering of remote data (toggle). */
+    /** Enable or disable rendering of remote data. */
     void setRemoteDisplayEnabled(bool enabled) { m_showRemote = enabled; }
     bool isRemoteDisplayEnabled() const { return m_showRemote; }
 
-    /** Set current PPQ position for playhead marker. */
+    /** Set current PPQ position for the playhead marker. */
     void setCurrentPpq(double ppq) { m_currentPpq = ppq; }
 
-    /** Set display range in beats. */
-    void setDisplayRangeBeats(double beats) {
-        if (beats != m_displayRangeBeats) {
-            m_displayRangeBeats  = beats;
-            m_rmsOverlayDirty    = true;
-            m_cancelOverlayDirty = true;
-        }
-    }
+    /** Inform ScopeDisplay of the current display range (must match prepare()). */
+    void setDisplayRangeBeats(double beats) { m_displayRangeBeats = beats; }
 
     /** Show per-1/16-beat RMS envelope as horizontal step lines. */
     void setRmsOverlayEnabled(bool enabled) { m_showRms = enabled; }
@@ -79,105 +81,177 @@ class ScopeDisplay : public juce::Component {
     /**
      * Show inter-instance cancellation index as a coloured bar at the bottom.
      * Green = no cancellation, yellow = partial, red = high cancellation.
-     * Only meaningful when at least two plugin instances are active.
+     * Meaningful only when at least two plugin instances are active.
      */
     void setCancellationOverlayEnabled(bool enabled) { m_showCancellation = enabled; }
 
-    /** Set the Y-axis amplitude scale factor [0.5, 4.0]. Double-click on the UI slider resets to 1.0. */
+    /** Y-axis amplitude scale factor [0.5, 4.0]. Double-click resets to 1.0. */
     void setAmplitudeScale(float scale) { m_amplitudeScale = juce::jlimit(0.5f, 4.0f, scale); }
     float getAmplitudeScale() const { return m_amplitudeScale; }
 
+    // -------------------------------------------------------------------------
+    // Data ingestion (called from the UI timer thread)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Write one local mono sample at the given absolute PPQ position.
+     * The configured HP/LP display filter is applied before writing into the
+     * ring buffer; the affected RMS and cancellation buckets are marked dirty.
+     */
+    void writeLocalSample(float sample, double ppq);
+
+    /**
+     * Consume remote raw-sample packets.
+     * For each packet, per-instance HP/LP filter state is applied to every sample
+     * before writing into its RawSampleBuffer.  Remote instances beyond
+     * MAX_INSTANCES − 1 are silently discarded.
+     *
+     * @param packets  Latest snapshot from SampleBroadcaster::getReceivedPackets().
+     * @param infos    Latest snapshot from CtrlBroadcaster::getRemoteInfos().
+     */
+    void writeRemotePackets(
+        const std::vector<SampleBroadcaster::RemoteRawPacket>& packets,
+        const std::vector<phu::network::RemoteInstanceInfo>&    infos);
+
+    /**
+     * Deactivate all remote instance slots (e.g. when receive is toggled off).
+     */
+    void clearRemoteInstances();
+
+    /**
+     * Recompute all dirty RMS and cancellation buckets, then scatter every
+     * active RawSampleBuffer to its 4096-bin display array.
+     * Call once per frame after all writeLocalSample / writeRemotePackets calls
+     * and before repaint().
+     */
+    void computeFrame();
+
   private:
-    // Local waveform data (copied from BeatSyncBuffer on UI thread)
-    std::vector<float> m_localData;
+    // -------------------------------------------------------------------------
+    // Per-instance data
+    // -------------------------------------------------------------------------
 
-    static constexpr int REMOTE_ACCUM_BINS = 4096;
+    struct InstanceSlot {
+        phu::audio::RawSampleBuffer  buffer;
+        phu::audio::BucketSet        rmsBuckets   { phu::audio::BucketSet::Kind::Rms    };
+        phu::audio::BucketSet        cancelBuckets{ phu::audio::BucketSet::Kind::Cancel };
+        LinkwitzRiley::LinkwitzRileyFilter<float> filterHP;
+        LinkwitzRiley::LinkwitzRileyFilter<float> filterLP;
 
-    // RMS: 1/16-beat slots, max 8 beats × 16 = 128 slots
-    static constexpr int MAX_METRIC_SLOTS = 128;
-    // Cancellation: fixed fine-grained windows (~4ms each at 4-beat display range)
-    static constexpr int MAX_CANCEL_SLOTS = 256;
+        bool     active     = false;
+        uint32_t instanceID = 0;
 
-    // Per-instance accumulation buffers in the receiver's coordinate space.
-    // Populated incrementally by setRemoteRawData(). Each entry persists across
-    // packets so bins written by earlier packets remain visible until overwritten.
-    struct RemoteAccumEntry {
-        // Waveform display: 4096-bin scatter-write (last-write-wins per bin)
-        std::vector<float> bins;           // size == REMOTE_ACCUM_BINS
+        /** Per-rmsBucket RMS for this instance; size == rmsBuckets.bucketCount(). */
+        std::vector<float> rmsValues;
 
-        // RMS accumulation: sum-of-squares and sample count per 1/16-beat slot.
-        // Slot index is normPos × numRmsSlots (= displayRangeBeats × 16, ≤ MAX_METRIC_SLOTS)
-        // so the slot resolution always matches what computeMetrics() reads.
-        float rmsAccum[MAX_METRIC_SLOTS]{};
-        int   rmsCount[MAX_METRIC_SLOTS]{};
+        /** 4096-bin scatter array for waveform rendering. */
+        std::vector<float> displayBins;
 
-        // Cancellation accumulation: per MAX_CANCEL_SLOTS slot, sum-of-squares and count.
-        // Always uses all MAX_CANCEL_SLOTS slots — computeMetrics iterates all 256.
-        float cancelAccum[MAX_CANCEL_SLOTS]{};
-        int   cancelCount[MAX_CANCEL_SLOTS]{};
+        /** Last display-cycle start seen on this instance (for filter reset on wrap). */
+        double lastWindowStart = -1e18;
 
-        double   lastWindowStart = -1e18;  // receiver-space cycle start, for clearing
-        uint32_t lastSeqNum      = 0;      // last processed sequence number
-        bool     hasSeq          = false;  // true once at least one packet has been processed
+        /** Remote packet sequence deduplication. */
+        uint32_t lastSeqNum = 0;
+        bool     hasSeq     = false;
     };
-    std::map<uint32_t, RemoteAccumEntry> m_remoteAccumBuffers;
-    double m_lastAccumReceiverRange = -1.0; // invalidated when receiver range changes
 
-    // Remote instance identity: keyed by instanceID, updated via setRemoteInfos()
+    /** Slot 0 = local instance; slots 1..7 = remote instances (in arrival order). */
+    std::array<InstanceSlot, MAX_INSTANCES> m_instances;
+
+    /** Maps remote instanceID → slot index (1–7). */
+    std::map<uint32_t, int> m_remoteSlotMap;
+
+    /** Per-instance identity (colour, label) from CtrlBroadcaster. */
     std::map<uint32_t, phu::network::RemoteInstanceInfo> m_remoteInfoMap;
 
-    // Sample rate for per-sample PPQ reconstruction in setRemoteRawData()
-    // Used as a fallback when no CtrlBroadcaster info is available for a remote instance.
-    double m_sampleRate = 44100.0;
+    // -------------------------------------------------------------------------
+    // Configuration
+    // -------------------------------------------------------------------------
 
-    // Display state
-    juce::Colour m_localColour{0xFF00FF88}; // default bright green
-    bool m_showLocal = true;
-    bool m_showRemote = true;
-    double m_currentPpq = 0.0;
     double m_displayRangeBeats = 4.0;
+    double m_bpm               = 120.0;
+    double m_sampleRate        = 44100.0;
+    bool   m_hpEnabled         = false;
+    float  m_hpFreq            = 80.0f;
+    bool   m_lpEnabled         = false;
+    float  m_lpFreq            = 8000.0f;
 
-    // Analysis overlays
-    bool m_showRms = false;
-    bool m_showCancellation = false;
+    // -------------------------------------------------------------------------
+    // Computed metric arrays (filled by computeFrame, read by paint)
+    // -------------------------------------------------------------------------
 
-    // Per-slot metric arrays, filled by computeMetrics() on the paint thread
+    /** Maximum number of RMS display slots (8 beats × 16 = 128). */
+    static constexpr int MAX_METRIC_SLOTS = 128;
+    /** Maximum number of cancellation display slots. */
+    static constexpr int MAX_CANCEL_SLOTS = 256;
+
+    /** RMS of the local instance per 1/16-beat slot. */
     float m_rmsLocal[MAX_METRIC_SLOTS]{};
-    float m_rmsSum[MAX_METRIC_SLOTS]{};       // rmsLocal + sum of per-remote RMS, per slot
+    /** Sum of per-instance RMSes per 1/16-beat slot (local + all remotes). */
+    float m_rmsSum  [MAX_METRIC_SLOTS]{};
+    /** Cancellation index per fine-grained slot. */
     float m_cancellationIndex[MAX_CANCEL_SLOTS]{};
+
+    /** Actual number of active RMS buckets (from first active instance). */
+    int m_numActiveRmsBuckets    = 0;
+    /** Actual number of active cancel buckets (from first active instance). */
+    int m_numActiveCancelBuckets = 0;
+
+    // -------------------------------------------------------------------------
+    // Display state
+    // -------------------------------------------------------------------------
+
+    juce::Colour m_localColour { 0xFF00FF88 }; // default bright green
+    bool   m_showLocal        = true;
+    bool   m_showRemote       = true;
+    double m_currentPpq       = 0.0;
+    bool   m_showRms          = false;
+    bool   m_showCancellation = false;
+    float  m_amplitudeScale   = 1.0f;
+
+    // -------------------------------------------------------------------------
+    // Overlay image cache
+    // -------------------------------------------------------------------------
+
+    juce::Image m_rmsOverlayImage;
+    juce::Image m_cancelOverlayImage;
+    bool m_rmsOverlayDirty    = true;
+    bool m_cancelOverlayDirty = true;
+    int  m_lastOverlayWidth   = 0;
+    int  m_lastOverlayHeight  = 0;
+
+    // -------------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------------
+
+    /** Prepare one instance slot for current display parameters (resize + clear). */
+    void prepareInstance(InstanceSlot& inst);
+
+    /** Set filter coefficients on a slot from the stored m_hp/lp params. */
+    void updateInstanceFilter(InstanceSlot& inst);
+
+    /** Apply filter (if enabled) and write one sample into the slot's ring buffer. */
+    void applyFilterAndWrite(InstanceSlot& inst, float sample, double ppq);
+
+    /** Scatter all ring buffer samples to the slot's 4096-bin display array. */
+    void scatterInstance(InstanceSlot& inst);
+
+    /** Recompute dirty RMS buckets for all active instances; fill m_rmsLocal/rmsSum. */
+    void recomputeRms();
+
+    /** Recompute dirty cancellation buckets; fill m_cancellationIndex. */
+    void recomputeCancellation();
 
     // Drawing helpers
     void drawGrid(juce::Graphics& g, juce::Rectangle<float> area);
     void drawWaveform(juce::Graphics& g, juce::Rectangle<float> area,
-                      const float* data, int numBins, juce::Colour colour, float alpha = 1.0f);
+                      const float* data, int numBins,
+                      juce::Colour colour, float alpha = 1.0f);
     void drawPlayhead(juce::Graphics& g, juce::Rectangle<float> area);
-
-    /** Compute m_rmsLocal[], m_rmsSum[], and m_cancellationIndex[] from current buffers. */
-    void computeMetrics();
-    /** Draw RMS step-envelope lines (called after drawGrid, before waveforms). */
     void drawRmsOverlay(juce::Graphics& g, juce::Rectangle<float> area);
-    /** Draw the cancellation colour bar at the bottom of the display. */
     void drawCancellationOverlay(juce::Graphics& g, juce::Rectangle<float> area);
 
-    // Amplitude scale factor applied to Y-axis display [0.5, 4.0]
-    float m_amplitudeScale = 1.0f;
-
-    // Reusable scratch vectors for computeMetrics() — allocated once, reused every frame
-    std::vector<const float*> m_metricRemotePtrs;
-    std::vector<int>          m_metricRemoteSizes;
-
-    // Cached overlay images — rebuilt only when data changes, blitted each repaint
-    juce::Image m_rmsOverlayImage;
-    juce::Image m_cancelOverlayImage;
-    bool        m_rmsOverlayDirty    = true;
-    bool        m_cancelOverlayDirty = true;
-    int         m_lastOverlayWidth   = 0;
-    int         m_lastOverlayHeight  = 0;
-
-    // Map raw sample value [-1, +1] to Y coordinate
     float sampleToY(float sample, float top, float height) const;
-
-    // Colour palette for remote instances
     static juce::Colour getRemoteColour(int index);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ScopeDisplay)
