@@ -22,7 +22,7 @@ using phu::network::SampleBroadcaster;
  * ensures only changed regions are recomputed for the RMS and cancellation
  * overlays.
  *
- * - X axis: musical position [0, 1) normalised within display range
+ * - X axis: musical position [0, 1) normalized within display range
  * - Y axis: sample amplitude [-1, +1] mapped to component height
  * - Playhead marker showing current PPQ position
  */
@@ -155,7 +155,7 @@ class ScopeDisplay : public juce::Component {
         bool     hasSeq     = false;
     };
 
-    /** Slot 0 = local instance; slots 1‥7 = remote instances (in arrival order). */
+    /** Slot 0 = local instance; slots 1..7 = remote instances (in arrival order). */
     std::array<InstanceSlot, MAX_INSTANCES> m_instances;
 
     /** Maps remote instanceID → slot index (1–7). */

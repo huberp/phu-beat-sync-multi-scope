@@ -329,16 +329,26 @@ void ScopeDisplay::recomputeCancellation() {
         const int count = end - start;
         if (count <= 0) continue;
 
+        // Clamp loop end to the minimum buffer size across all active instances.
+        // All instances are normally prepared with the same parameters (same N),
+        // but a newly activated remote instance may have a slightly different size
+        // if BPM or sample rate changed between prepare() calls.
+        int safeEnd = end;
+        for (const auto& inst : m_instances)
+            if (inst.active)
+                safeEnd = juce::jmin(safeEnd, inst.buffer.size());
+        if (safeEnd <= start) continue;
+        const int safeCount = safeEnd - start;
+
         // Denominator: sum of individual per-instance RMSes over this range
         float D = 0.0f;
         for (const auto& inst : m_instances) {
             if (!inst.active) continue;
             const float* raw = inst.buffer.data();
-            const int    N   = inst.buffer.size();
             float sumSq = 0.0f;
-            for (int i = start; i < juce::jmin(end, N); ++i)
+            for (int i = start; i < safeEnd; ++i)
                 sumSq += raw[i] * raw[i];
-            D += std::sqrt(sumSq / static_cast<float>(count));
+            D += std::sqrt(sumSq / static_cast<float>(safeCount));
         }
 
         if (D <= 1e-4f) {
@@ -351,15 +361,15 @@ void ScopeDisplay::recomputeCancellation() {
 
         // Numerator: RMS of the summed waveform over the same range
         float sumSqSum = 0.0f;
-        for (int i = start; i < end; ++i) {
+        for (int i = start; i < safeEnd; ++i) {
             float v = 0.0f;
             for (const auto& inst : m_instances) {
-                if (!inst.active || i >= inst.buffer.size()) continue;
+                if (!inst.active) continue;
                 v += inst.buffer.data()[i];
             }
             sumSqSum += v * v;
         }
-        const float N_val = std::sqrt(sumSqSum / static_cast<float>(count));
+        const float N_val = std::sqrt(sumSqSum / static_cast<float>(safeCount));
 
         const float ci = juce::jlimit(0.0f, 1.0f, 1.0f - N_val / D);
         constexpr float D_REF = 0.1f;
