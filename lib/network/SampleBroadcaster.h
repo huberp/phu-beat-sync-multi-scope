@@ -14,9 +14,11 @@ namespace network {
  * SampleBroadcaster: UDP multicast broadcaster/receiver for sharing raw audio
  * sample streams between plugin instances on the same machine (localhost only).
  *
- * Sender path: the audio thread pushes every mono sample into a ring buffer;
- * the processor timer (~30 Hz) drains full chunks and sends each chunk as a
- * RawSamplesPacket tagged with the PPQ position of its first sample.
+ * Sender path: the audio thread accumulates mono samples into a ping-pong
+ * broadcast buffer (owned by PluginProcessor); when a slot is full (≈33 ms at
+ * the current sample rate), broadcastRawSamples() is called directly from the
+ * audio thread via loopback sendto() (<5 µs round-trip — acceptable on audio
+ * thread for loopback-only operation).
  *
  * Receiver path: a dedicated background thread receives packets and stores
  * the latest packet per remote instance in a mutex-protected map.  The UI
@@ -25,7 +27,8 @@ namespace network {
  * accumulation.
  *
  * Thread safety:
- * - broadcastRawSamples() is safe to call from any single thread (timer/message)
+ * - broadcastRawSamples() is safe to call from the audio thread (no locks,
+ *   loopback sendto() only)
  * - getReceivedPackets() is safe to call from any thread
  * - Receiver thread is managed internally
  *
@@ -105,12 +108,14 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     /**
      * Broadcast a chunk of raw mono samples to all instances on the multicast group.
      *
+     * Safe to call from the audio thread: no locks, loopback sendto() only.
+     *
      * @param samples            Raw mono float samples [-1, +1]
      * @param numSamples         Number of samples (must be ≤ BROADCAST_CHUNK_SAMPLES)
      * @param ppqOfFirstSample   Absolute PPQ position of samples[0]
      * @param bpm                Current BPM
      * @param displayRangeBeats  Sender's display range in beats
-     * @param seqNum             Monotonic sequence number (message-thread only)
+     * @param seqNum             Monotonic sequence number (audio thread only)
      * @return true if the packet was sent, false if disabled or a socket error occurred
      */
     bool broadcastRawSamples(const float* samples, int numSamples,

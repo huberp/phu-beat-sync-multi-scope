@@ -1,7 +1,6 @@
 #pragma once
 
 #include "../lib/audio/AudioSampleFifo.h"
-#include "../lib/audio/AudioSampleRingBuffer.h"
 #include "../lib/audio/BeatSyncBuffer.h"
 #include "../lib/events/SyncGlobals.h"
 #include "../lib/network/CtrlBroadcaster.h"
@@ -16,7 +15,6 @@ namespace phu { namespace debug { class EditorLogger; } }
 #endif
 
 using phu::audio::AudioSampleFifo;
-using phu::audio::AudioSampleRingBuffer;
 using phu::audio::BeatSyncBuffer;
 using phu::events::GlobalsEventListener;
 using phu::network::CtrlBroadcaster;
@@ -165,22 +163,20 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     // Heartbeat tracking (message thread only)
     int64_t m_lastCtrlHeartbeatMs = 0;
 
-    // Raw sample ring buffer: audio thread writes mono samples + PPQ; message thread drains.
-    // Loopback-only — sized dynamically in prepareToPlay() to absorb timer hiccups.
-    AudioSampleRingBuffer m_rawBroadcastRing;
+    // Ping-pong broadcast buffer: the audio thread accumulates mono samples into
+    // one slot; when full (≈33 ms) it calls broadcastRawSamples() directly via
+    // loopback sendto() and flips to the other slot. No timer drain needed.
+    struct BroadcastSlot {
+        std::array<float, SampleBroadcaster::BROADCAST_CHUNK_SAMPLES> samples{};
+        double ppqOfFirstSample = 0.0;
+        int    count            = 0;
+        int    capacity         = 0; // set in prepareToPlay: round(sampleRate × 0.033)
+    };
+    BroadcastSlot m_broadcastSlots[2];
+    int           m_broadcastWriteSlot = 0; // audio thread only
 
-    // Runtime broadcast chunk size (samples per packet), computed in prepareToPlay()
-    // from the DAW sample rate so that each packet covers ~33 ms regardless of rate.
-    // Default of 1470 is safe at 44.1 kHz and ensures timerCallback() works even
-    // before prepareToPlay() is called.
-    int m_broadcastChunkSize = 1470;
-
-    // Sequence number for outgoing RawSamplesPackets (message-thread only)
+    // Sequence number for outgoing RawSamplesPackets (audio thread only)
     uint32_t m_broadcastSeqNum = 0;
-
-    // Work buffer for draining the ring buffer on the message thread
-    std::vector<float>  m_broadcastSampleBuf;
-    std::vector<double> m_broadcastPpqBuf;
 
     double m_lastWriteWindowStart = -1.0; // audio-thread only: last cycle start written
 
