@@ -14,3 +14,4 @@ add_subdirectory("${JUCE_ROOT}")
 
 add_subdirectory(lib)
 add_subdirectory(src)
+add_subdirectory(tests)
