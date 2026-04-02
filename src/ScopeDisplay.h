@@ -119,8 +119,9 @@ class ScopeDisplay : public juce::Component {
     void clearRemoteInstances();
 
     /**
-     * Recompute all dirty RMS and cancellation buckets, then scatter every
-     * active RawSampleBuffer to its 4096-bin display array.
+     * Scatter every active RawSampleBuffer to its 4096-bin display array
+     * (dirty RMS buckets only), then recompute dirty RMS and cancellation
+     * buckets when their respective overlays are enabled.
      * Call once per frame after all writeLocalSample / writeRemotePackets calls
      * and before repaint().
      */
@@ -233,7 +234,7 @@ class ScopeDisplay : public juce::Component {
     /** Apply filter (if enabled) and write one sample into the slot's ring buffer. */
     void applyFilterAndWrite(InstanceSlot& inst, float sample, double ppq);
 
-    /** Scatter all ring buffer samples to the slot's 4096-bin display array. */
+    /** Scatter dirty-bucket samples to the slot's 4096-bin display array. */
     void scatterInstance(InstanceSlot& inst);
 
     /** Recompute dirty RMS buckets for all active instances; fill m_rmsLocal/rmsSum. */

@@ -207,11 +207,13 @@ void ScopeDisplay::clearRemoteInstances() {
 // ============================================================================
 
 void ScopeDisplay::computeFrame() {
-    recomputeRms();
-    recomputeCancellation();
     for (auto& inst : m_instances)
         if (inst.active)
             scatterInstance(inst);
+    if (m_showRms)
+        recomputeRms();
+    if (m_showCancellation)
+        recomputeCancellation();
 }
 
 void ScopeDisplay::scatterInstance(InstanceSlot& inst) {
@@ -220,11 +222,32 @@ void ScopeDisplay::scatterInstance(InstanceSlot& inst) {
     if (static_cast<int>(inst.displayBins.size()) != DISPLAY_BINS)
         inst.displayBins.assign(DISPLAY_BINS, 0.0f);
 
-    const float* raw = inst.buffer.data();
-    for (int i = 0; i < N; ++i) {
-        const int bin = i * DISPLAY_BINS / N;
-        if (bin >= 0 && bin < DISPLAY_BINS)
-            inst.displayBins[static_cast<size_t>(bin)] = raw[i];
+    const float* raw         = inst.buffer.data();
+    const int    numBuckets  = inst.rmsBuckets.bucketCount();
+
+    if (numBuckets == 0) {
+        // No buckets configured — full scatter as fallback
+        for (int i = 0; i < N; ++i) {
+            const int bin = i * DISPLAY_BINS / N;
+            if (bin >= 0 && bin < DISPLAY_BINS)
+                inst.displayBins[static_cast<size_t>(bin)] = raw[i];
+        }
+        return;
+    }
+
+    // Only scatter samples that fall within dirty RMS buckets.
+    // Dirty flags are read here and cleared later by recomputeRms().
+    for (int bi = 0; bi < numBuckets; ++bi) {
+        const auto& b = inst.rmsBuckets.bucket(bi);
+        if (!b.dirty) continue;
+
+        const int start = b.startIdx;
+        const int end   = juce::jmin(b.endIdx, N);
+        for (int i = start; i < end; ++i) {
+            const int bin = i * DISPLAY_BINS / N;
+            if (bin >= 0 && bin < DISPLAY_BINS)
+                inst.displayBins[static_cast<size_t>(bin)] = raw[i];
+        }
     }
 }
 
