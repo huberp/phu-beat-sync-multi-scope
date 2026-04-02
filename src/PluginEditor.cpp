@@ -85,6 +85,14 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
     identityGroup.setText("Identity");
     addAndMakeVisible(identityGroup);
 
+    // Channel index combo ("Ch 1" – "Ch 8") — backed by the instance_channel APVTS parameter
+    for (int i = 1; i <= 8; ++i)
+        channelIndexCombo.addItem("Ch " + juce::String(i), i);
+    channelIndexCombo.setSelectedId(audioProcessor.getInstanceIndex(), juce::dontSendNotification);
+    channelIndexAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.getAPVTS(), "instance_channel", channelIndexCombo);
+    addAndMakeVisible(channelIndexCombo);
+
     channelLabelTextLabel.setText("Label:", juce::dontSendNotification);
     channelLabelTextLabel.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(channelLabelTextLabel);
@@ -286,12 +294,14 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
 
     controlStrip.removeFromLeft(8); // Spacing
 
-    // Identity group (channel label + colour swatch)
+    // Identity group (channel index combo + channel label + colour swatch)
     auto identityArea = controlStrip;
     identityGroup.setBounds(identityArea);
     auto identityContent = identityArea.reduced(8, 0);
     identityContent.removeFromTop(16);
     identityContent.removeFromBottom(4);
+    channelIndexCombo.setBounds(identityContent.removeFromLeft(60));
+    identityContent.removeFromLeft(6);
     channelLabelTextLabel.setBounds(identityContent.removeFromLeft(40));
     identityContent.removeFromLeft(4);
     colourSwatchButton.setBounds(identityContent.removeFromRight(24));
@@ -357,6 +367,12 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::syncUIFromProcessorState() {
     channelLabelEditor.setText(audioProcessor.getChannelLabel(), juce::dontSendNotification);
     const juce::Colour colour = audioProcessor.getInstanceColour();
     colourSwatchButton.setColour(juce::TextButton::buttonColourId, colour);
+
+    // Sync channel index combo and notify ScopeDisplay
+    const int idx = audioProcessor.getInstanceIndex();
+    channelIndexCombo.setSelectedId(idx, juce::dontSendNotification);
+    scopeDisplay.setLocalInstanceIndex(idx);
+    m_lastLocalInstanceIndex = idx;
 
     // Scope display
     scopeDisplay.setDisplayRangeBeats(audioProcessor.getDisplayRangeBeats());
@@ -438,6 +454,15 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
 
     // Enforce BPM-aware display range constraints (grey out/auto-switch)
     updateDisplayRangeConstraints();
+
+    // --- Poll channel index: sync to ScopeDisplay whenever the user changes it ---
+    {
+        const int currentIdx = audioProcessor.getInstanceIndex();
+        if (currentIdx != m_lastLocalInstanceIndex) {
+            scopeDisplay.setLocalInstanceIndex(currentIdx);
+            m_lastLocalInstanceIndex = currentIdx;
+        }
+    }
 
     // --- Consume remote packets (network receive on UI thread, per requirement) ---
     const bool remoteEnabled = remoteDisplayToggle.getToggleState();

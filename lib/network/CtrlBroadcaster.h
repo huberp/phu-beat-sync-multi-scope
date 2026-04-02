@@ -28,7 +28,8 @@ struct CtrlPacket {
     uint32_t sequenceNumber;      // monotonic, for ordering
 
     uint8_t  eventType;           // CtrlEventType
-    uint8_t  _pad[3];
+    uint8_t  instanceIndex;       // user-assigned channel index [1, 8]
+    uint8_t  _pad[2];
 
     double   sampleRate;          // actual DAW sample rate — fixes ASSUMED_SAMPLE_RATE gap
     uint32_t maxBufferSize;
@@ -48,6 +49,7 @@ struct CtrlPacket {
 // Received state for a remote plugin instance (populated from CtrlPackets)
 struct RemoteInstanceInfo {
     uint32_t instanceID        = 0;
+    uint8_t  instanceIndex     = 1;   ///< user-assigned channel index [1, 8]
     int64_t  lastSeenMs        = 0;   ///< from getCurrentTimeMs()
     bool     isOnline          = false;
     double   sampleRate        = 44100.0;
@@ -92,7 +94,7 @@ class CtrlBroadcaster : public MulticastBroadcasterBase {
     static constexpr int64_t     STALE_TIMEOUT_MS      = 15000;
 
     /** Protocol version — bumped when wire format changes. */
-    static constexpr uint32_t    PROTOCOL_VERSION      = 2;
+    static constexpr uint32_t    PROTOCOL_VERSION      = 3;
 
     CtrlBroadcaster();
     ~CtrlBroadcaster() override = default;

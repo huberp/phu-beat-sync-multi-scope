@@ -119,6 +119,12 @@ class ScopeDisplay : public juce::Component {
     void clearRemoteInstances();
 
     /**
+     * Update the local instance's display slot index.
+     * @param newIndex  User-assigned channel index [1, 8].
+     */
+    void setLocalInstanceIndex(int newIndex);
+
+    /**
      * Scatter every active RawSampleBuffer to its 4096-bin display array
      * (dirty RMS buckets only), then recompute dirty RMS and cancellation
      * buckets when their respective overlays are enabled.
@@ -146,6 +152,7 @@ class ScopeDisplay : public juce::Component {
         LinkwitzRiley::LinkwitzRileyFilter<float> filterLP;
 
         bool     active     = false;
+        bool     isLocal    = false;   ///< true only for the local instance slot
         uint32_t instanceID = 0;
 
         /** Per-rmsBucket RMS for this instance; size == rmsBuckets.bucketCount(). */
@@ -165,9 +172,6 @@ class ScopeDisplay : public juce::Component {
     /** Slot 0 = local instance; slots 1..7 = remote instances (in arrival order). */
     std::array<InstanceSlot, MAX_INSTANCES> m_instances;
 
-    /** Maps remote instanceID → slot index (1–7). */
-    std::map<uint32_t, int> m_remoteSlotMap;
-
     /** Per-instance identity (colour, label) from CtrlBroadcaster. */
     std::map<uint32_t, phu::network::RemoteInstanceInfo> m_remoteInfoMap;
 
@@ -182,6 +186,10 @@ class ScopeDisplay : public juce::Component {
     float  m_hpFreq            = 80.0f;
     bool   m_lpEnabled         = false;
     float  m_lpFreq            = 8000.0f;
+
+    /** User-assigned channel index for the local instance [1, 8].  Determines which
+     *  InstanceSlot the local audio stream is written into. */
+    int m_localInstanceIndex = 1;
 
     // -------------------------------------------------------------------------
     // Computed metric arrays (filled by computeFrame, read by paint)

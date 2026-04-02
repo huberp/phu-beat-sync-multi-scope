@@ -62,6 +62,7 @@ bool CtrlBroadcaster::sendCtrl(CtrlEventType eventType, const char* label,
     packet.instanceID        = instanceID;
     packet.sequenceNumber    = m_sequenceNumber++;
     packet.eventType         = static_cast<uint8_t>(eventType);
+    packet.instanceIndex     = m_instanceIndex.load(std::memory_order_relaxed);
     packet.sampleRate        = sampleRate;
     packet.maxBufferSize     = maxBufferSize;
     packet.displayRangeBeats = displayRangeBeats;
@@ -152,6 +153,7 @@ void CtrlBroadcaster::receiverThreadRun() {
             // Announce, LabelChange, RangeChange — upsert the info record
             auto& info             = m_remoteInfos[packet.instanceID];
             info.instanceID        = packet.instanceID;
+            info.instanceIndex     = packet.instanceIndex;
             info.lastSeenMs        = getCurrentTimeMs();
             info.isOnline          = true;
             info.sampleRate        = packet.sampleRate;

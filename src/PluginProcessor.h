@@ -79,6 +79,9 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     void setInstanceColour(juce::Colour colour);
     juce::Colour getInstanceColour() const;
 
+    /** Get the user-assigned channel index [1, 8] from the instance_channel APVTS param. */
+    int getInstanceIndex() const;
+
     /** juce::Timer callback — drains raw sample ring buffer and sends packets (~30 Hz). */
     void timerCallback() override;
 
@@ -146,6 +149,12 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
 
     // Heartbeat tracking (message thread only)
     int64_t m_lastCtrlHeartbeatMs = 0;
+
+    // Last instance index broadcast to the network layer (message thread only)
+    int m_lastBroadcastInstanceIndex = -1;
+
+    /** Push current instance_channel APVTS value to both broadcasters. */
+    void syncInstanceIndexToBroadcasters();
 
     // Ping-pong broadcast buffer: the audio thread accumulates mono samples into
     // one slot; when full (≈33 ms) it calls broadcastRawSamples() directly via

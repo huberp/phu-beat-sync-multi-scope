@@ -6,8 +6,9 @@
 
 ScopeDisplay::ScopeDisplay() {
     setOpaque(true);
-    // Slot 0 is always the local instance
+    // Slot 0 is always the local instance by default (index 1)
     m_instances[0].active     = true;
+    m_instances[0].isLocal    = true;
     m_instances[0].instanceID = 0; // local has no remote ID
 }
 
@@ -186,7 +187,7 @@ void ScopeDisplay::writeLocalSample(float sample, double ppq) {
     const double ppqPerSample = (m_bpm > 0.0 && m_sampleRate > 0.0)
                                     ? m_bpm / (60.0 * m_sampleRate)
                                     : 0.0;
-    applyFilterAndWriteBatch(m_instances[0], &sample, 1, ppq, ppqPerSample);
+    applyFilterAndWriteBatch(m_instances[m_localInstanceIndex - 1], &sample, 1, ppq, ppqPerSample);
     m_rmsOverlayDirty    = true;
     m_cancelOverlayDirty = true;
 }
@@ -200,16 +201,15 @@ void ScopeDisplay::writeRemotePackets(
     for (const auto& info : infos)
         m_remoteInfoMap[info.instanceID] = info;
 
-    // Deactivate slots for instances that are no longer in the packet set.
+    // Deactivate slots for instances no longer in the packet set.
     // Skip when packets is empty (receive toggled off) — clearRemoteInstances() handles that.
     if (!packets.empty()) {
-        for (int i = 1; i < MAX_INSTANCES; ++i) {
-            if (!m_instances[i].active) continue;
+        for (int i = 0; i < MAX_INSTANCES; ++i) {
+            if (m_instances[i].isLocal || !m_instances[i].active) continue;
             bool found = false;
             for (const auto& pkt : packets)
                 if (pkt.instanceID == m_instances[i].instanceID) { found = true; break; }
             if (!found) {
-                m_remoteSlotMap.erase(m_instances[i].instanceID);
                 m_instances[i].active     = false;
                 m_instances[i].instanceID = 0;
                 m_instances[i].hasSeq     = false;
@@ -223,27 +223,24 @@ void ScopeDisplay::writeRemotePackets(
     for (const auto& pkt : packets) {
         if (pkt.numSamples == 0) continue;
 
-        // Find or allocate a slot
-        int slotIdx = -1;
-        auto it = m_remoteSlotMap.find(pkt.instanceID);
-        if (it != m_remoteSlotMap.end()) {
-            slotIdx = it->second;
-        } else {
-            for (int i = 1; i < MAX_INSTANCES; ++i) {
-                if (!m_instances[i].active) {
-                    slotIdx = i;
-                    m_instances[i].active     = true;
-                    m_instances[i].instanceID = pkt.instanceID;
-                    m_instances[i].hasSeq     = false;
-                    m_remoteSlotMap[pkt.instanceID] = i;
-                    prepareInstance(m_instances[i]);
-                    break;
-                }
-            }
-            if (slotIdx == -1) continue; // Max instances reached; discard
-        }
+        // Determine slot index directly from the sender's instanceIndex.
+        // instanceIndex is in [1, 8] on the wire; clamp to valid range just in case.
+        const int slotIdx = juce::jlimit(0, MAX_INSTANCES - 1,
+                                         static_cast<int>(pkt.instanceIndex) - 1);
+
+        // Local always wins: skip remote packets that claim the local slot
+        if (slotIdx == m_localInstanceIndex - 1) continue;
 
         auto& inst = m_instances[slotIdx];
+
+        // Activate slot on first packet from this instance (or if instanceID changed)
+        if (!inst.active || inst.instanceID != pkt.instanceID) {
+            inst.active     = true;
+            inst.isLocal    = false;
+            inst.instanceID = pkt.instanceID;
+            inst.hasSeq     = false;
+            prepareInstance(inst);
+        }
 
         // Sequence deduplication: skip packets we have already processed
         if (inst.hasSeq && pkt.sequenceNumber == inst.lastSeqNum) continue;
@@ -269,18 +266,44 @@ void ScopeDisplay::writeRemotePackets(
 }
 
 void ScopeDisplay::clearRemoteInstances() {
-    for (int i = 1; i < MAX_INSTANCES; ++i) {
+    for (int i = 0; i < MAX_INSTANCES; ++i) {
+        if (m_instances[i].isLocal) continue;
         m_instances[i].active     = false;
         m_instances[i].instanceID = 0;
         m_instances[i].hasSeq     = false;
         m_instances[i].displayBins.assign(DISPLAY_BINS, 0.0f);
         m_instances[i].rmsValues.clear();
     }
-    m_remoteSlotMap.clear();
     m_remoteInfoMap.clear();
     m_rmsOverlayDirty    = true;
     m_cancelOverlayDirty = true;
     m_frameHasNewData    = true;
+}
+
+void ScopeDisplay::setLocalInstanceIndex(int newIndex) {
+    const int clamped = juce::jlimit(1, MAX_INSTANCES, newIndex);
+    if (clamped == m_localInstanceIndex) return;
+
+    // Deactivate old local slot
+    const int oldSlot = m_localInstanceIndex - 1;
+    m_instances[oldSlot].isLocal     = false;
+    m_instances[oldSlot].active      = false;
+    m_instances[oldSlot].instanceID  = 0;
+    m_instances[oldSlot].hasSeq      = false;
+    m_instances[oldSlot].displayBins.assign(DISPLAY_BINS, 0.0f);
+    m_instances[oldSlot].rmsValues.clear();
+
+    // Activate new local slot
+    const int newSlot = clamped - 1;
+    m_instances[newSlot].isLocal     = true;
+    m_instances[newSlot].active      = true;
+    m_instances[newSlot].instanceID  = 0;
+    m_instances[newSlot].hasSeq      = false;
+    prepareInstance(m_instances[newSlot]);
+
+    m_localInstanceIndex = clamped;
+    m_rmsOverlayDirty    = true;
+    m_cancelOverlayDirty = true;
 }
 
 // ============================================================================
@@ -385,7 +408,7 @@ void ScopeDisplay::recomputeRms() {
             if (!inst.active) continue;
             if (s >= static_cast<int>(inst.rmsValues.size())) continue;
             const float rms = inst.rmsValues[static_cast<size_t>(s)];
-            if (ii == 0) m_rmsLocal[s] = rms;
+            if (inst.isLocal) m_rmsLocal[s] = rms;
             sum += rms;
         }
         m_rmsSum[s] = sum;
@@ -507,8 +530,9 @@ void ScopeDisplay::paint(juce::Graphics& g) {
 
     // Determine whether any remote instance is active
     bool hasActiveRemotes = false;
-    for (int i = 1; i < MAX_INSTANCES; ++i)
-        if (m_instances[i].active) { hasActiveRemotes = true; break; }
+    const int localSlot = m_localInstanceIndex - 1;
+    for (int i = 0; i < MAX_INSTANCES; ++i)
+        if (i != localSlot && m_instances[i].active) { hasActiveRemotes = true; break; }
 
     // Invalidate overlay images when the display area changes
     const int w = static_cast<int>(bounds.getWidth());
@@ -548,10 +572,10 @@ void ScopeDisplay::paint(juce::Graphics& g) {
 
     // Remote waveforms (drawn first, underneath local)
     if (m_showRemote && hasActiveRemotes) {
-        int colourIdx = 0;
-        for (int i = 1; i < MAX_INSTANCES; ++i) {
+        for (int i = 0; i < MAX_INSTANCES; ++i) {
             const auto& inst = m_instances[i];
-            if (!inst.active || inst.displayBins.empty()) { ++colourIdx; continue; }
+            if (inst.isLocal) continue;
+            if (!inst.active || inst.displayBins.empty()) continue;
 
             juce::Colour colour;
             juce::String label;
@@ -562,7 +586,7 @@ void ScopeDisplay::paint(juce::Graphics& g) {
                                       info.colourRGBA[2], info.colourRGBA[3]);
                 label  = juce::String(info.channelLabel);
             } else {
-                colour = getRemoteColour(colourIdx);
+                colour = getRemoteColour(i);
             }
 
             drawWaveform(g, bounds, inst.displayBins.data(),
@@ -574,19 +598,19 @@ void ScopeDisplay::paint(juce::Graphics& g) {
                 g.setFont(juce::Font(juce::FontOptions(11.0f)));
                 g.drawText(label,
                            static_cast<int>(bounds.getX() + 4),
-                           static_cast<int>(bounds.getY() + 4 + colourIdx * 14),
+                           static_cast<int>(bounds.getY() + 4 + i * 14),
                            150, 13,
                            juce::Justification::centredLeft, true);
             }
-            ++colourIdx;
         }
     }
 
     // Local waveform (on top)
-    if (m_showLocal && !m_instances[0].displayBins.empty()) {
+    const auto& localInst = m_instances[localSlot];
+    if (m_showLocal && !localInst.displayBins.empty()) {
         drawWaveform(g, bounds,
-                     m_instances[0].displayBins.data(),
-                     static_cast<int>(m_instances[0].displayBins.size()),
+                     localInst.displayBins.data(),
+                     static_cast<int>(localInst.displayBins.size()),
                      m_localColour, 1.0f);
     }
 

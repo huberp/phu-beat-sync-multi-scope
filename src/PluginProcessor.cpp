@@ -94,7 +94,29 @@ PhuBeatSyncMultiScopeAudioProcessor::createParameterLayout() {
             "display_lp_freq", "LP Freq", lpRange, 8000.0f));
     }
 
+    // User-assigned channel index [1, 8]: determines which display slot this instance
+    // maps to in ScopeDisplay and which packet slot remote receivers render into.
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        "instance_channel", "Channel",
+        juce::StringArray{"Ch 1", "Ch 2", "Ch 3", "Ch 4",
+                          "Ch 5", "Ch 6", "Ch 7", "Ch 8"},
+        0)); // Default: Ch 1
+
     return {params.begin(), params.end()};
+}
+
+int PhuBeatSyncMultiScopeAudioProcessor::getInstanceIndex() const {
+    // instance_channel is a 0-based choice ("Ch 1"=0 … "Ch 8"=7) → return 1-based index
+    if (auto* p = apvts.getRawParameterValue("instance_channel"))
+        return static_cast<int>(p->load(std::memory_order_relaxed)) + 1;
+    return 1;
+}
+
+void PhuBeatSyncMultiScopeAudioProcessor::syncInstanceIndexToBroadcasters() {
+    const int idx = getInstanceIndex();
+    m_sampleBroadcaster.setInstanceIndex(static_cast<uint8_t>(idx));
+    m_ctrlBroadcaster.setInstanceIndex(static_cast<uint8_t>(idx));
+    m_lastBroadcastInstanceIndex = idx;
 }
 
 // ============================================================================
@@ -142,6 +164,9 @@ void PhuBeatSyncMultiScopeAudioProcessor::prepareToPlay(double sampleRate, int s
         static_cast<uint32_t>(samplesPerBlock),
         m_colourRGBA,
         PLUGIN_TYPE, PLUGIN_VERSION);
+
+    // Sync user-assigned channel index to both broadcasters
+    syncInstanceIndexToBroadcasters();
 
     // Reset heartbeat timer so we don't send a redundant Announce too soon
     m_lastCtrlHeartbeatMs = getProcessorTimeMs();
@@ -255,6 +280,11 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
 // ============================================================================
 
 void PhuBeatSyncMultiScopeAudioProcessor::timerCallback() {
+    // --- Sync channel index if user changed it since last heartbeat ---
+    const int currentIdx = getInstanceIndex();
+    if (currentIdx != m_lastBroadcastInstanceIndex)
+        syncInstanceIndexToBroadcasters();
+
     // --- Ctrl heartbeat (every 5 s): keeps late-joining peers up to date ---
     const int64_t nowMs = getProcessorTimeMs();
     if (nowMs - m_lastCtrlHeartbeatMs > CtrlBroadcaster::HEARTBEAT_INTERVAL_MS) {
@@ -393,6 +423,9 @@ void PhuBeatSyncMultiScopeAudioProcessor::setStateInformation(const void* data, 
         if (xmlState->hasTagName(apvts.state.getType())) {
             auto state = juce::ValueTree::fromXml(*xmlState);
             apvts.replaceState(state);
+
+            // Sync channel index after state is restored (instance_channel may have changed)
+            syncInstanceIndexToBroadcasters();
 
             // Restore broadcast/receive enabled state
             if (state.hasProperty("broadcastEnabled"))

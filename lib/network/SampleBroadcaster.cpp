@@ -67,6 +67,7 @@ bool SampleBroadcaster::broadcastRawSamples(const float* samples, int numSamples
     packet.magic             = PROTOCOL_MAGIC;
     packet.version           = PROTOCOL_VERSION;
     packet.instanceID        = instanceID;
+    packet.instanceIndex     = m_instanceIndex.load(std::memory_order_relaxed);
     packet.sequenceNumber    = seqNum;
     packet.ppqOfFirstSample  = ppqOfFirstSample;
     packet.bpm               = bpm;
@@ -167,6 +168,7 @@ void SampleBroadcaster::receiverThreadRun() {
 
         RemoteRawPacket data;
         data.instanceID       = packet.instanceID;
+        data.instanceIndex    = packet.instanceIndex;
         data.timestamp        = getCurrentTimeMs();
         data.sequenceNumber   = packet.sequenceNumber;
         data.ppqOfFirstSample = packet.ppqOfFirstSample;

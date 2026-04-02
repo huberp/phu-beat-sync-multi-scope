@@ -53,7 +53,7 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     static constexpr int BROADCAST_CHUNK_SAMPLES = 6350;
 
     /** Protocol version — bumped when wire format changes. */
-    static constexpr uint32_t PROTOCOL_VERSION = 3;
+    static constexpr uint32_t PROTOCOL_VERSION = 4;
 
     /** Time in milliseconds after which a remote instance is considered stale. */
     static constexpr int64_t STALE_TIMEOUT_MS = 3000;
@@ -66,8 +66,10 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     #pragma pack(push, 1)
     struct RawSamplesPacket {
         uint32_t magic;               // Protocol magic: 0x534D504C ("SMPL")
-        uint32_t version;             // Protocol version: 3
+        uint32_t version;             // Protocol version: 4
         uint32_t instanceID;          // Unique instance identifier
+        uint8_t  instanceIndex;       // User-assigned channel index [1, 8]
+        uint8_t  _idx_pad[3];         // Padding to maintain alignment
         uint32_t sequenceNumber;      // Monotonic per-sender, wraps at UINT32_MAX
         double   ppqOfFirstSample;    // Absolute PPQ position of samples[0]
         double   bpm;                 // Sender BPM (used by receiver for ppq_i reconstruction)
@@ -83,6 +85,7 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
      */
     struct RemoteRawPacket {
         uint32_t instanceID          = 0;
+        uint8_t  instanceIndex       = 1;    ///< user-assigned channel index [1, 8]
         int64_t  timestamp           = 0;    ///< local receive time (ms) for staleness
         uint32_t sequenceNumber      = 0;
         double   ppqOfFirstSample    = 0.0;

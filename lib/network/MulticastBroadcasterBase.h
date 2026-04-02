@@ -74,6 +74,11 @@ class MulticastBroadcasterBase {
     /** Override the instance ID. Must be called before initialize(). */
     void setInstanceID(uint32_t id) { instanceID = id; }
 
+    /** User-assigned channel index [1, 8].  Stamped into every outgoing packet
+     *  so receivers can map packets to a deterministic display slot. */
+    uint8_t getInstanceIndex() const { return m_instanceIndex.load(std::memory_order_relaxed); }
+    void    setInstanceIndex(uint8_t idx) { m_instanceIndex.store(idx, std::memory_order_relaxed); }
+
   protected:
     // ---- Subclass hooks ---------------------------------------------------
 
@@ -93,6 +98,7 @@ class MulticastBroadcasterBase {
 
     // Instance identification
     uint32_t instanceID;
+    std::atomic<uint8_t> m_instanceIndex{1};
 
     // Thread management
     std::atomic<bool> running{false};

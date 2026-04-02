@@ -55,6 +55,7 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
 
     // Channel identity controls
     juce::GroupComponent identityGroup;
+    juce::ComboBox       channelIndexCombo;      // "Ch 1" ... "Ch 8"
     juce::Label          channelLabelTextLabel;  // "Label:" label
     juce::TextEditor     channelLabelEditor;     // editable channel name (max 31 chars)
     juce::TextButton     colourSwatchButton;     // shows current colour; click to change
@@ -93,6 +94,9 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     // the enabled→disabled transition, not unconditionally every 60-Hz tick.
     bool m_lastRemoteEnabled = true;
 
+    // Track local instance index so we only call setLocalInstanceIndex() when it changes
+    int m_lastLocalInstanceIndex = -1;
+
     // Minimum gap between HP and LP frequencies (Hz)
     static constexpr float MIN_FREQ_GAP = 10.0f;
 
@@ -114,6 +118,9 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
 
     // APVTS attachment for display range
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> displayRangeAttachment;
+
+    // APVTS attachment for channel index
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> channelIndexAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhuBeatSyncMultiScopeAudioProcessorEditor)
 };
