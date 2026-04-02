@@ -108,26 +108,12 @@ double PhuBeatSyncMultiScopeAudioProcessor::getMaxDisplayBeatsForBpm(double bpm)
     return 1.0;
 }
 
-int PhuBeatSyncMultiScopeAudioProcessor::computeInputFifoCapacity(double sampleRate) {
-    // Worst-case window: 8 beats at the 80-BPM threshold = 6 × sampleRate samples.
-    // Supports sample rates up to 192 kHz and display windows down to 40 BPM
-    // within the allowed range restrictions.
-    return static_cast<int>(std::ceil(6.0 * sampleRate));
-}
-
 // ============================================================================
 // Audio Processing
 // ============================================================================
 
 void PhuBeatSyncMultiScopeAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     m_syncGlobals.updateSampleRate(sampleRate);
-    m_inputSyncBuf.prepare(NUM_SYNC_BINS);
-
-    // Resize the FIFO to hold the largest possible display window at this sample rate.
-    // This prevents data loss at slow tempos and high sample rates (up to 192 kHz).
-    m_inputFifo.resize(computeInputFifoCapacity(sampleRate));
-
-    m_inputFifo.reset();
 
     // Track DAW stream parameters for ctrl packets
     m_currentSampleRate = sampleRate;
@@ -191,16 +177,7 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
                                       : juce::Optional<juce::AudioPlayHead::PositionInfo>();
     m_syncGlobals.updateDAWGlobals(buffer, midiMessages, positionInfo);
 
-    // 2. Push audio to input FIFO (for UI thread)
-    const float* channelPtrs[2] = {nullptr, nullptr};
-    for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch)
-        channelPtrs[ch] = buffer.getReadPointer(ch);
-    // If mono, duplicate to second channel
-    if (numChannels == 1)
-        channelPtrs[1] = channelPtrs[0];
-    m_inputFifo.push(channelPtrs, numSamples);
-
-    // 3. Write beat-sync buffer (PPQ → normalized position → bin)
+    // 2. Push samples to local ring and accumulate broadcast slot
     double bpm = m_syncGlobals.getBPM();
     double displayRange = m_displayRangeBeats.load();
     double sampleRate = m_syncGlobals.getSampleRate();
@@ -208,18 +185,6 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
     if (bpm > 0.0 && displayRange > 0.0 && sampleRate > 0.0) {
         double blockPpq = m_syncGlobals.getPpqBlockStart();
         double ppqPerSample = bpm / (60.0 * sampleRate);
-
-        // Detect cycle boundary by block end PPQ. For short ranges (<= 1 beat),
-        // hard-clear on cycle transition to prevent previous-beat events from
-        // lingering into the next beat. For longer ranges, keep history and let
-        // per-sample writes naturally roll through the window.
-        const double blockEndPpq    = blockPpq + numSamples * ppqPerSample;
-        const double endWindowStart = std::floor(blockEndPpq / displayRange) * displayRange;
-        if (std::abs(endWindowStart - m_lastWriteWindowStart) > 1e-9) {
-            if (displayRange <= 1.0 + 1e-9)
-                m_inputSyncBuf.clear();
-            m_lastWriteWindowStart = endWindowStart;
-        }
 
         // Hoist channel count and raw pointers out of the per-sample loop.
         // Using read pointers allows the compiler to auto-vectorize the mono mix,
@@ -250,16 +215,8 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
             }
         }
 
-        // Replace std::fmod per sample with a linear normalized-position increment.
-        // Start at the block's normalized position and advance by normStep each sample,
-        // wrapping with a single branch — eliminates N libm fmod calls per block.
-        const double normStep = ppqPerSample / displayRange;
-        double normPos = std::fmod(blockPpq, displayRange) / displayRange;
-        if (normPos < 0.0) normPos += 1.0;
-
         for (int i = 0; i < numSamples; ++i) {
             const float monoIn = (ch0[i] + ch1[i]) * monoScale;
-            m_inputSyncBuf.write(normPos, monoIn);
 
             // Accumulate mono samples into the current ping-pong broadcast slot.
             // When the slot is full (≈33 ms at the current sample rate), send the
@@ -285,9 +242,6 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
                     }
                 }
             }
-
-            normPos += normStep;
-            if (normPos >= 1.0) normPos -= 1.0;
         }
 
         m_syncGlobals.setPpqEndOfBlock(blockPpq + numSamples * ppqPerSample);

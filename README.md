@@ -27,7 +27,7 @@ A JUCE-based VST3 audio plugin that provides a **beat-synced multi-instance osci
 - **Show Local / Show Remote toggles**: independently show or hide the local and remote waveforms
 - **Broadcast toggle**: enable/disable sending your waveform to other instances — broadcasting continues **headlessly** even when the plugin UI is closed
 - **PPQ-accurate remote alignment**: each network packet carries a PPQ reference so remote waveforms are pinned correctly to the beat grid even when sender and receiver use different display ranges
-- **Accumulation buffer**: remote bins are scatter-written into receiver-space, so a sender with a narrow range doesn't erase the rest of the display and a sender with a wide range doesn't double-paint
+- **Per-instance raw sample buffers**: each instance (local + remotes) owns a position-indexed ring buffer; samples are written at their absolute beat position, keeping all instances beat-aligned with no accumulated skew
 
 ### Display Filters
 - **High-pass and Low-pass filters** on the display path (does not affect the audio signal), with frequency knobs
@@ -100,45 +100,56 @@ If the build times out, reduce parallel jobs: `cmake --build --preset linux-buil
 
 | Component | Location | Responsibility |
 |---|---|---|
-| `BeatSyncBuffer` | `lib/audio/BeatSyncBuffer.h` | Position-indexed 4096-bin display buffer; maps audio samples to normalized beat position `[0,1)`. Audio-thread writes. |
-| `AudioSampleFifo` | `lib/audio/AudioSampleFifo.h` | Lock-free FIFO transferring samples from audio thread to UI thread |
+| `RawSampleBuffer` | `lib/audio/RawSampleBuffer.h` | Position-indexed raw sample ring buffer; maps audio samples to beat position via PPQ. |
+| `BucketSet` | `lib/audio/BucketSet.h` | Partitions the ring buffer into dirty-tracked buckets for RMS and cancellation computation. |
 | `SyncGlobals` | `lib/events/SyncGlobals.h` | DAW sync state (BPM, PPQ, transport); atomic PPQ for UI reads |
 | `MulticastBroadcasterBase` | `lib/network/MulticastBroadcasterBase.h` | Abstract UDP multicast infrastructure: socket management, receiver thread, platform abstraction |
-| `SampleBroadcaster` | `lib/network/SampleBroadcaster.h` | Sends/receives beat-synced waveform packets; 8-bit quantized samples + PPQ reference |
-| `ScopeDisplay` | `src/ScopeDisplay.h` | Oscilloscope component: beat-aligned rendering, accumulation buffers, RMS + cancellation overlays |
+| `SampleBroadcaster` | `lib/network/SampleBroadcaster.h` | Sends/receives beat-synced raw sample packets; PPQ reference for beat alignment |
+| `ScopeDisplay` | `src/ScopeDisplay.h` | Oscilloscope component: per-instance RawSampleBuffer + BucketSet pipeline, beat-aligned rendering, RMS + cancellation overlays |
 | `DisplayFilterStrip` | `src/DisplayFilterStrip.h` | HP/LP filter controls for the display path |
-| `PluginProcessor` | `src/PluginProcessor.h` | Audio processing, `BeatSyncBuffer` writes, headless broadcast timer (~10 Hz) |
+| `PluginProcessor` | `src/PluginProcessor.h` | Audio processing, ping-pong broadcast buffer (direct audio-thread send), local SPSC ring for UI handoff |
 
 ### Data Flow
 
 ```
 Audio Thread (processBlock)
   ├─ Update DAW globals (BPM, PPQ, transport)
-  ├─ Push samples to AudioSampleFifo (for display filters)
-  └─ Write BeatSyncBuffer (PPQ → normalized position → bin)
+  ├─ Push (monoSample, absolutePpq) to local SPSC ring  →  UI thread RawSampleBuffer[local]
+  └─ Accumulate into ping-pong broadcast slot
+       └─ when full (~33 ms): sendto() directly, flip slot
 
-Processor Timer (~10 Hz)  ← runs even when UI is closed
-  └─ If Broadcast enabled: copy BeatSyncBuffer → SampleBroadcaster.send()
+UDP receive thread (SampleBroadcaster)
+  └─ stores latest RawSamplesPacket per sender
+
+Processor Timer (30 Hz)  ← runs even when UI is closed
+  └─ CTRL heartbeat (every 5 s): keeps late-joining peers up to date
 
 UI Timer (60 Hz)
-  ├─ Read BeatSyncBuffer → apply DisplayFilters → ScopeDisplay.setLocalData()
-  ├─ SampleBroadcaster.getReceivedSamples() → ScopeDisplay.setRemoteData()
-  └─ Repaint: grid → RMS overlay → remote waveforms → local waveform → playhead
-                                                     └─ cancellation bar (bottom)
+  ├─ Drain local SPSC ring
+  │    ├─ apply HP/LP filter to each sample
+  │    ├─ write into RawSampleBuffer[local] at PPQ-mapped index
+  │    └─ mark affected rmsBuckets + cancelBuckets dirty
+  ├─ Consume remote packets (getReceivedPackets)
+  │    for each remote instance (max 7):
+  │    ├─ apply HP/LP filter (per-instance filter state)
+  │    ├─ write into RawSampleBuffer[remote_i] at PPQ-mapped index
+  │    └─ mark affected buckets dirty
+  ├─ Recompute dirty rmsBuckets  →  rms[] per bucket
+  ├─ Recompute dirty cancelBuckets  →  cancelIndex[] per bucket
+  ├─ Scatter RawSampleBuffer[*] → display bins (4096) for waveform rendering
+  └─ Repaint ScopeDisplay
 ```
 
 ### Remote Beat Alignment
 
-Each packet carries `ppqPosition` and `displayRangeBeats`. The receiver projects sender bins into its own coordinate space:
+Each packet carries `ppqOfFirstSample`, `bpm`, and `displayRangeBeats`. The receiver uses these to compute write indices into its own `RawSampleBuffer`:
 
 ```
-senderWindowStart = floor(ppqPosition / senderRange) * senderRange
-absolutePpq(i)    = senderWindowStart + (i / numBins) * senderRange
-normPos           = fmod(absolutePpq, receiverRange) / receiverRange
-receiverBin       = (int)(normPos * REMOTE_ACCUM_BINS)
+normPos  = fmod(absolutePpq, receiverRange) / receiverRange   // [0, 1)
+writeIdx = (int)(normPos × bufferSize)
 ```
 
-Bins are scatter-written into a per-instance 1024-bin accumulation buffer (`m_remoteAccumBuffers`). Unbounded bins from previous packets persist across frames, preventing blinking when the sender has a narrower range than the receiver.
+Samples are written at their absolute beat position, so a sender with a narrower or wider range than the receiver is automatically aligned to the beat grid.
 
 ### Cancellation Detector
 
