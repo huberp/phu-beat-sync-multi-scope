@@ -600,7 +600,6 @@ void ScopeDisplay::drawWaveform(juce::Graphics& g, juce::Rectangle<float> area,
 
 void ScopeDisplay::drawRmsOverlay(juce::Graphics& g, juce::Rectangle<float> area) {
     const int numSlots = juce::jmax(1, m_numActiveRmsBuckets);
-    const float slotW  = area.getWidth() / static_cast<float>(numSlots);
 
     // When remote display is off, show only local RMS.
     // When remote is on and there are active remotes, show the combined sum.
@@ -609,11 +608,36 @@ void ScopeDisplay::drawRmsOverlay(juce::Graphics& g, juce::Rectangle<float> area
         if (m_instances[i].active) { hasActiveRemotes = true; break; }
     const bool useSum = m_showRemote && hasActiveRemotes;
 
+    // Find the reference instance so we can map bucket index-ranges to pixel
+    // positions exactly as RawSampleBuffer does (startIdx/N → beat fraction).
+    // This avoids the off-by-fractional-bucket alignment that occurs when
+    // integer truncation in computeBucketSize() creates a small leftover bucket.
+    const InstanceSlot* refInst = nullptr;
+    for (const auto& inst : m_instances) {
+        if (inst.active && inst.rmsBuckets.bucketCount() > 0) {
+            refInst = &inst;
+            break;
+        }
+    }
+    const int N = refInst ? refInst->buffer.size() : 0;
+    const float fallbackSlotW = area.getWidth() / static_cast<float>(numSlots);
+
     for (int s = 0; s < numSlots && s < MAX_METRIC_SLOTS; ++s) {
         const float rms = useSum ? m_rmsSum[s] : m_rmsLocal[s];
         if (rms < 1e-6f) continue;
 
-        const float x0    = area.getX() + static_cast<float>(s) * slotW;
+        // Map bucket to screen x using its actual buffer-index range so that
+        // slot boundaries align with the beat-position grid lines.
+        float x0, slotW;
+        if (refInst && N > 0 && s < refInst->rmsBuckets.bucketCount()) {
+            const auto& b = refInst->rmsBuckets.bucket(s);
+            x0    = area.getX() + (static_cast<float>(b.startIdx) / static_cast<float>(N)) * area.getWidth();
+            slotW = (static_cast<float>(b.endIdx - b.startIdx) / static_cast<float>(N)) * area.getWidth();
+        } else {
+            x0    = area.getX() + static_cast<float>(s) * fallbackSlotW;
+            slotW = fallbackSlotW;
+        }
+
         const float lineY = sampleToY(rms, area.getY(), area.getHeight());
 
         g.setColour(juce::Colour(0x1A44AAFF));
