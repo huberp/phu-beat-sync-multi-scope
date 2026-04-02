@@ -393,14 +393,18 @@ void ScopeDisplay::recomputeRms() {
 }
 
 void ScopeDisplay::recomputeCancellation() {
-    std::fill(std::begin(m_cancellationIndex), std::end(m_cancellationIndex), 0.0f);
     m_numActiveCancelBuckets = 0;
 
-    // Need at least 2 active instances for cancellation to be meaningful
+    // Need at least 2 active instances for cancellation to be meaningful.
+    // When fewer are active, reset the display to all-green (zero) so stale
+    // values from a previous session don't linger after remote is toggled off.
     int numActive = 0;
     for (const auto& inst : m_instances)
         if (inst.active) ++numActive;
-    if (numActive < 2) return;
+    if (numActive < 2) {
+        std::fill(std::begin(m_cancellationIndex), std::end(m_cancellationIndex), 0.0f);
+        return;
+    }
 
     // Get bucket count from the first active instance
     int numBuckets = 0;
@@ -456,7 +460,8 @@ void ScopeDisplay::recomputeCancellation() {
         }
 
         if (D <= 1e-4f) {
-            // Below noise floor — mark clean and skip
+            // Below noise floor — mark clean, zero this slot, and skip
+            m_cancellationIndex[bi] = 0.0f;
             for (auto& inst : m_instances)
                 if (inst.active && bi < inst.cancelBuckets.bucketCount())
                     inst.cancelBuckets.bucket(bi).dirty = false;
