@@ -63,10 +63,13 @@ class BucketSet {
     void recompute(double /*bpm*/, double sampleRate, double displayBeats, int bufferSize) {
         m_buckets.clear();
 
-        if (bufferSize <= 0)
+        if (bufferSize <= 0) {
+            m_bucketSize = 1;
             return;
+        }
 
         const int bucketSize = computeBucketSize(sampleRate, displayBeats, bufferSize);
+        m_bucketSize = bucketSize;
         const int maxBuckets = (m_kind == Kind::Rms) ? kMaxRmsBuckets : kMaxCancelBuckets;
 
         int start = 0;
@@ -85,6 +88,7 @@ class BucketSet {
      * Mark every bucket whose range overlaps [fromIdx, toIdx) as dirty.
      *
      * Performs a linear scan; O(bucketsInRange) for contiguous write regions.
+     * Prefer markDirtyIndex() for single-sample writes.
      *
      * @param fromIdx  Inclusive start of the written region.
      * @param toIdx    Exclusive end of the written region.
@@ -93,6 +97,62 @@ class BucketSet {
         for (auto& b : m_buckets) {
             if (b.startIdx < toIdx && b.endIdx > fromIdx)
                 b.dirty = true;
+        }
+    }
+
+    /**
+     * Mark the single bucket that contains writeIdx as dirty. O(1).
+     *
+     * Uses integer division (writeIdx / bucketSize) to directly index the bucket.
+     * The last (remainder) bucket is reached by clamping to bucketCount-1, which
+     * is correct because floor(writeIdx / bucketSize) >= bucketCount-1 for any
+     * writeIdx that falls in the remainder range.
+     *
+     * Prefer this over markDirty() for single-sample writes from
+     * RawSampleBuffer::write(), which always produces a one-element range.
+     *
+     * @param writeIdx  The buffer index that was just written (from WriteRange::from).
+     */
+    void markDirtyIndex(int writeIdx) {
+        if (m_buckets.empty() || m_bucketSize <= 0) return;
+        int bi = writeIdx / m_bucketSize;
+        if (bi >= static_cast<int>(m_buckets.size()))
+            bi = static_cast<int>(m_buckets.size()) - 1;
+        m_buckets[static_cast<size_t>(bi)].dirty = true;
+    }
+
+    /**
+     * Mark every bucket touched by a contiguous write from buffer index u1 to
+     * u2 (both inclusive).  Handles the wrap-around case where the write spans
+     * the end of the ring and continues from index 0.
+     *
+     * No-wrap  (u1 <= u2): marks buckets  [u1/bl .. u2/bl]
+     * Wrap     (u1 >  u2): marks buckets  [u1/bl .. last]  AND  [0 .. u2/bl]
+     *
+     * Complexity: O(number of buckets touched) — typically O(1) for a short
+     * packet, O(bucketCount) at worst for a full-buffer wrap.
+     *
+     * @param u1  Buffer index of the first written sample (inclusive).
+     * @param u2  Buffer index of the last  written sample (inclusive).
+     */
+    void markDirtyRange(int u1, int u2) {
+        if (m_buckets.empty() || m_bucketSize <= 0) return;
+        const int last = static_cast<int>(m_buckets.size()) - 1;
+        int i1 = u1 / m_bucketSize;
+        if (i1 > last) i1 = last;
+        int i2 = u2 / m_bucketSize;
+        if (i2 > last) i2 = last;
+
+        if (i1 <= i2) {
+            // Common case: no ring wrap, one contiguous bucket range
+            for (int i = i1; i <= i2; ++i)
+                m_buckets[static_cast<size_t>(i)].dirty = true;
+        } else {
+            // Ring wrapped: [i1 .. last] and [0 .. i2]
+            for (int i = i1; i <= last; ++i)
+                m_buckets[static_cast<size_t>(i)].dirty = true;
+            for (int i = 0;  i <= i2;   ++i)
+                m_buckets[static_cast<size_t>(i)].dirty = true;
         }
     }
 
@@ -162,6 +222,9 @@ class BucketSet {
     /** The Kind this BucketSet was constructed with. */
     Kind kind() const { return m_kind; }
 
+    /** The uniform bucket size (samples per bucket) last computed by recompute(). */
+    int bucketSize() const { return m_bucketSize; }
+
   private:
     int computeBucketSize(double sampleRate, double displayBeats, int bufferSize) const {
         if (m_kind == Kind::Rms) {
@@ -177,6 +240,7 @@ class BucketSet {
     }
 
     Kind                m_kind;
+    int                 m_bucketSize = 1;
     std::vector<Bucket> m_buckets;
 };
 

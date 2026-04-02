@@ -127,6 +127,12 @@ class ScopeDisplay : public juce::Component {
      */
     void computeFrame();
 
+    /** Returns true if new sample data was written since the last clearNewFrameData(). */
+    bool hasNewFrameData() const { return m_frameHasNewData; }
+
+    /** Clears the new-data flag; call after computeFrame() + repaint(). */
+    void clearNewFrameData() { m_frameHasNewData = false; }
+
   private:
     // -------------------------------------------------------------------------
     // Per-instance data
@@ -221,6 +227,11 @@ class ScopeDisplay : public juce::Component {
     int  m_lastOverlayWidth   = 0;
     int  m_lastOverlayHeight  = 0;
 
+    /** Set to true whenever applyFilterAndWriteBatch() or clearRemoteInstances()
+     *  writes data this frame.  Consumed and cleared by the editor's timerCallback()
+     *  to skip computeFrame() + repaint() when nothing changed (DAW stopped). */
+    bool m_frameHasNewData = false;
+
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
@@ -231,8 +242,28 @@ class ScopeDisplay : public juce::Component {
     /** Set filter coefficients on a slot from the stored m_hp/lp params. */
     void updateInstanceFilter(InstanceSlot& inst);
 
-    /** Apply filter (if enabled) and write one sample into the slot's ring buffer. */
-    void applyFilterAndWrite(InstanceSlot& inst, float sample, double ppq);
+    /**
+     * Apply the HP/LP filter to every sample in [samples, samples+numSamples)
+     * and write them into the slot's ring buffer starting at the index that
+     * corresponds to ppqOfFirstSample.
+     *
+     * The start index is computed once via indexForPpq().  Subsequent indices
+     * advance by 1 modulo buffer size (guaranteed by the math:  consecutive
+     * PPQ values spaced bpm/(60*sr) apart map to consecutive ring indices).
+     * When the write wraps past the end of the ring it continues from index 0
+     * (two-phase memcpy-style split).
+     *
+     * Dirty marking is deferred to a single markDirtyRange() call after all
+     * samples are written, covering only the buckets that were actually touched.
+     *
+     * @param samples           Array of raw (unfiltered) mono samples.
+     * @param numSamples        Number of samples in the array.
+     * @param ppqOfFirstSample  Absolute PPQ position of samples[0].
+     * @param ppqPerSample      PPQ advance per sample = bpm / (60 * sampleRate).
+     */
+    void applyFilterAndWriteBatch(InstanceSlot& inst,
+                                  const float* samples, int numSamples,
+                                  double ppqOfFirstSample, double ppqPerSample);
 
     /** Scatter dirty-bucket samples to the slot's 4096-bin display array. */
     void scatterInstance(InstanceSlot& inst);

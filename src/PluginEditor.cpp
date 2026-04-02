@@ -440,19 +440,26 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
     updateDisplayRangeConstraints();
 
     // --- Consume remote packets (network receive on UI thread, per requirement) ---
-    if (remoteDisplayToggle.getToggleState()) {
+    const bool remoteEnabled = remoteDisplayToggle.getToggleState();
+    if (remoteEnabled) {
         audioProcessor.getCtrlBroadcaster().getRemoteInfos(m_remoteInfosCache);
         audioProcessor.getSampleBroadcaster().getReceivedPackets(m_remoteDataCache);
         scopeDisplay.writeRemotePackets(m_remoteDataCache, m_remoteInfosCache);
-    } else {
+    } else if (m_lastRemoteEnabled) {
+        // Remote display just turned off — clear instance slots once instead of
+        // zeroing 114 KB of buffers unconditionally at 60 Hz.
         scopeDisplay.clearRemoteInstances();
     }
+    m_lastRemoteEnabled = remoteEnabled;
 
-    // --- Compute frame (dirty bucket recomputation + scatter to display bins) ---
-    scopeDisplay.computeFrame();
-
-    // Repaint scope
-    scopeDisplay.repaint();
+    // --- Compute frame and repaint only when new data arrived ---
+    // Skipping computeFrame() + repaint() when the DAW is stopped (and no remote
+    // packets are incoming) eliminates ~10 ms of idle CPU work per 60-Hz tick.
+    if (scopeDisplay.hasNewFrameData()) {
+        scopeDisplay.computeFrame();
+        scopeDisplay.repaint();
+        scopeDisplay.clearNewFrameData();
+    }
 }
 
 // ============================================================================

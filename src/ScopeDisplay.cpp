@@ -76,35 +76,117 @@ void ScopeDisplay::setFilterParams(bool hpEnabled, float hpFreq,
 // Data Ingestion
 // ============================================================================
 
-void ScopeDisplay::applyFilterAndWrite(InstanceSlot& inst, float sample, double ppq) {
-    if (inst.buffer.size() <= 0) return;
+void ScopeDisplay::applyFilterAndWriteBatch(InstanceSlot& inst,
+                                             const float* samples, int numSamples,
+                                             double ppqOfFirstSample, double ppqPerSample) {
+    const int N = inst.buffer.size();
+    if (N <= 0 || numSamples <= 0) return;
 
-    // Detect display-cycle boundary to reset filter state on PPQ wrap
+    // Clamp incoming batch to the ring capacity so we never overwrite a position
+    // more than once within a single call.  Any excess samples would just
+    // overwrite earlier ones in this same batch — not useful.
+    const int count = std::min(numSamples, N);
+
+    // Compute the start index once from the first sample's PPQ.
+    const int startIdx = inst.buffer.indexForPpq(ppqOfFirstSample);
+
+    // Handle display-cycle boundary: reset filter state if the first sample of
+    // this batch belongs to a different display window than the previous batch.
     if (m_displayRangeBeats > 0.0) {
         const double windowStart =
-            std::floor(ppq / m_displayRangeBeats) * m_displayRangeBeats;
+            std::floor(ppqOfFirstSample / m_displayRangeBeats) * m_displayRangeBeats;
         if (std::abs(windowStart - inst.lastWindowStart) > 1e-9) {
             inst.filterHP.reset();
             inst.filterLP.reset();
             inst.lastWindowStart = windowStart;
         }
+        // If the batch itself crosses a display-window boundary, also detect and
+        // reset mid-batch.  Compute the PPQ of the last sample to check.
+        if (count > 1 && ppqPerSample > 0.0) {
+            const double lastPpq = ppqOfFirstSample + static_cast<double>(count - 1) * ppqPerSample;
+            const double lastWindowStart =
+                std::floor(lastPpq / m_displayRangeBeats) * m_displayRangeBeats;
+            if (std::abs(lastWindowStart - windowStart) > 1e-9) {
+                // Find the crossing point and reset there; process the first
+                // sub-range with current filter state, reset, then continue.
+                // For simplicity (rare event: once per display window), find
+                // the exact crossing sample index.
+                const double nextWindowStart = windowStart + m_displayRangeBeats;
+                // samples_until_wrap = ceil((nextWindowStart - ppqOfFirstSample) / ppqPerSample)
+                int crossIdx = static_cast<int>(std::ceil(
+                    (nextWindowStart - ppqOfFirstSample) / ppqPerSample));
+                crossIdx = std::max(1, std::min(crossIdx, count - 1));
+
+                // Phase A: samples[0 .. crossIdx-1] — before the boundary
+                const int countA = std::min(crossIdx, std::min(count, N - startIdx));
+                for (int i = 0; i < countA; ++i) {
+                    float v = samples[i];
+                    if (m_hpEnabled) v = inst.filterHP.processSample(v);
+                    if (m_lpEnabled) v = inst.filterLP.processSample(v);
+                    inst.buffer.writeAt(startIdx + i, v);
+                }
+                // Wrap phase A if needed
+                for (int i = countA; i < crossIdx; ++i) {
+                    float v = samples[i];
+                    if (m_hpEnabled) v = inst.filterHP.processSample(v);
+                    if (m_lpEnabled) v = inst.filterLP.processSample(v);
+                    inst.buffer.writeAt(i - (N - startIdx), v);
+                }
+
+                // Reset at the boundary
+                inst.filterHP.reset();
+                inst.filterLP.reset();
+                inst.lastWindowStart = lastWindowStart;
+
+                // Phase B: samples[crossIdx .. count-1] — after the boundary
+                for (int i = crossIdx; i < count; ++i) {
+                    const int idx = (startIdx + i) % N;
+                    float v = samples[i];
+                    if (m_hpEnabled) v = inst.filterHP.processSample(v);
+                    if (m_lpEnabled) v = inst.filterLP.processSample(v);
+                    inst.buffer.writeAt(idx, v);
+                }
+
+                // Dirty mark: wrap-aware (startIdx, lastIdx)
+                const int lastIdx = (startIdx + count - 1) % N;
+                inst.rmsBuckets.markDirtyRange(startIdx, lastIdx);
+                inst.cancelBuckets.markDirtyRange(startIdx, lastIdx);
+                m_frameHasNewData = true;
+                return;
+            }
+        }
     }
 
-    // Apply HP/LP display filter per-sample
-    float filtered = sample;
-    if (m_hpEnabled) filtered = inst.filterHP.processSample(filtered);
-    if (m_lpEnabled) filtered = inst.filterLP.processSample(filtered);
-
-    // Write at PPQ-mapped position and mark affected buckets dirty
-    const auto range = inst.buffer.write(filtered, ppq);
-    if (range.from < range.to) {
-        inst.rmsBuckets.markDirty(range.from, range.to);
-        inst.cancelBuckets.markDirty(range.from, range.to);
+    // Fast path — no display-window boundary within this batch.
+    // Phase A: samples[0 .. countA-1] fill indices [startIdx .. min(startIdx+count-1, N-1)]
+    const int countA = std::min(count, N - startIdx);
+    for (int i = 0; i < countA; ++i) {
+        float v = samples[i];
+        if (m_hpEnabled) v = inst.filterHP.processSample(v);
+        if (m_lpEnabled) v = inst.filterLP.processSample(v);
+        inst.buffer.writeAt(startIdx + i, v);
     }
+    // Phase B (ring wrap): remaining samples fill indices [0 .. countB-1]
+    const int countB = count - countA;
+    for (int i = 0; i < countB; ++i) {
+        float v = samples[countA + i];
+        if (m_hpEnabled) v = inst.filterHP.processSample(v);
+        if (m_lpEnabled) v = inst.filterLP.processSample(v);
+        inst.buffer.writeAt(i, v);
+    }
+
+    // Single dirty-range call covering the whole batch.
+    const int lastIdx = (startIdx + count - 1) % N;
+    inst.rmsBuckets.markDirtyRange(startIdx, lastIdx);
+    inst.cancelBuckets.markDirtyRange(startIdx, lastIdx);
+    m_frameHasNewData = true;
 }
 
 void ScopeDisplay::writeLocalSample(float sample, double ppq) {
-    applyFilterAndWrite(m_instances[0], sample, ppq);
+    const double ppqPerSample = (m_bpm > 0.0 && m_sampleRate > 0.0)
+                                    ? m_bpm / (60.0 * m_sampleRate)
+                                    : 0.0;
+    applyFilterAndWriteBatch(m_instances[0], &sample, 1, ppq, ppqPerSample);
     m_rmsOverlayDirty    = true;
     m_cancelOverlayDirty = true;
 }
@@ -178,10 +260,8 @@ void ScopeDisplay::writeRemotePackets(
         }
         const double ppqPerSample = bpm / (60.0 * remoteSr);
 
-        for (int i = 0; i < static_cast<int>(pkt.numSamples); ++i) {
-            const double ppq = pkt.ppqOfFirstSample + static_cast<double>(i) * ppqPerSample;
-            applyFilterAndWrite(inst, pkt.samples[i], ppq);
-        }
+        applyFilterAndWriteBatch(inst, pkt.samples, static_cast<int>(pkt.numSamples),
+                                 pkt.ppqOfFirstSample, ppqPerSample);
     }
 
     m_rmsOverlayDirty    = true;
@@ -200,6 +280,7 @@ void ScopeDisplay::clearRemoteInstances() {
     m_remoteInfoMap.clear();
     m_rmsOverlayDirty    = true;
     m_cancelOverlayDirty = true;
+    m_frameHasNewData    = true;
 }
 
 // ============================================================================

@@ -85,6 +85,38 @@ class RawSampleBuffer {
         return {idx, idx + 1};
     }
 
+    /**
+     * Compute the ring-buffer index that corresponds to the given PPQ position
+     * without writing anything.  Used by callers that need to know the start
+     * index before issuing a batch of writeAt() calls.
+     *
+     * @param ppq  Absolute DAW playhead position in beats.
+     * @return     Buffer index in [0, size()-1], or 0 if the buffer is empty.
+     */
+    int indexForPpq(double ppq) const {
+        if (m_size <= 0) return 0;
+        const double normPos0 = std::fmod(ppq, m_displayBeats) / m_displayBeats;
+        const double normPos  = (normPos0 < 0.0) ? normPos0 + 1.0 : normPos0;
+        int idx = static_cast<int>(normPos * static_cast<double>(m_size));
+        if (idx < 0) idx = 0;
+        if (idx >= m_size) idx = m_size - 1;
+        return idx;
+    }
+
+    /**
+     * Write a single pre-filtered sample at a pre-computed buffer index.
+     *
+     * The index must have been obtained from indexForPpq() (or computed by
+     * advancing a previous index by 1 modulo size()).  No bounds computation
+     * or PPQ math is performed here.
+     *
+     * @param idx   Buffer index in [0, size()-1].
+     * @param val   Sample value to store.
+     */
+    void writeAt(int idx, float val) {
+        m_buffer[static_cast<size_t>(idx)] = val;
+    }
+
     /** Direct read access to the sample array for scatter/RMS passes. */
     const float* data() const { return m_buffer.data(); }
 

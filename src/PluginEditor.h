@@ -89,6 +89,10 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     // Track last BPM-derived max display range to avoid redundant combo-box updates
     double m_lastMaxDisplayBeats = 8.0;
 
+    // Track remote-display toggle state to call clearRemoteInstances() only on
+    // the enabled→disabled transition, not unconditionally every 60-Hz tick.
+    bool m_lastRemoteEnabled = true;
+
     // Minimum gap between HP and LP frequencies (Hz)
     static constexpr float MIN_FREQ_GAP = 10.0f;
 
