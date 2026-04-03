@@ -7,55 +7,82 @@
 [![Format](https://img.shields.io/badge/format-VST3-purple.svg)](#building)
 [![JUCE](https://img.shields.io/badge/JUCE-8.0.12-orange.svg)](https://juce.com)
 
-A JUCE-based VST3 audio plugin that provides a **beat-synced multi-instance oscilloscope**. Load it on multiple DAW tracks and all instances share their waveforms in real time over the local network — beats and bars stay pixel-perfect aligned regardless of display range or network jitter.
+A VST3 oscilloscope that loads on multiple DAW tracks simultaneously. All instances stay beat-aligned and share waveforms over the local network in real time — useful for comparing phase, level and transient alignment across tracks.
 
-## Screenshot
+![Overview — RMS and Cancellation overlays active](doc/image-scope-rms-cancelation.png)
 
-![PHU Beat Sync Multi Scope](doc/screenshot.png)
+---
 
-*Two instances active: green = local track, red = remote track. RMS Envelope (blue glow) and Cancellation bar (bottom) overlays are enabled.*
+## Contents
 
-## Features
+- [User Guide](#user-guide)
+- [Building](#building)
+- [Architecture](#architecture)
+- [Cancellation Detector](#cancellation-detector)
+- [Contributing](#contributing)
+- [License](#license)
 
-### Waveform Display
-- **Beat-synced oscilloscope**: audio samples are mapped to musical position (PPQ), so every instance shows the same beat grid regardless of playback position
-- **Configurable display range**: 1/4, 1/2, 1, 2, 4, or 8 beats per window
-- **Playhead marker**: live white vertical line tracking current PPQ position
-- **Amplitude grid**: horizontal reference lines at 0, ±0.5, ±1.0 with labels
+---
 
-### Multi-Instance Networking
-- **Show Local / Show Remote toggles**: independently show or hide the local and remote waveforms
-- **Broadcast toggle**: enable/disable sending your waveform to other instances — broadcasting continues **headlessly** even when the plugin UI is closed
-- **PPQ-accurate remote alignment**: each network packet carries a PPQ reference so remote waveforms are pinned correctly to the beat grid even when sender and receiver use different display ranges
-- **Per-instance raw sample buffers**: each instance (local + remotes) owns a position-indexed ring buffer; samples are written at their absolute beat position, keeping all instances beat-aligned with no accumulated skew
+## User Guide
 
-### Display Filters
-- **High-pass and Low-pass filters** on the display path (does not affect the audio signal), with frequency knobs
-- Filters update in real time as you move the knobs
-
-### Analysis Overlays
-- **RMS Envelope**: blue-glow step lines at every 1/16-note position showing the RMS amplitude of the summed signal (local + all visible remotes). Reflects only the local signal when *Show Remote* is off
-- **Cancellation detector**: fine-grained colour bar at the bottom of the scope (~4 ms resolution) indicating inter-instance phase cancellation — green = in-phase, yellow = partial, red = high cancellation. Level-weighted to suppress spurious readings on near-silent signals. See [Cancellation Detector](#cancellation-detector) for the full formula.
-
-## Installation
+### Installation
 
 1. Download the latest release from [Releases](https://github.com/huberp/phu-beat-sync-multi-scope/releases)
-2. Copy the `.vst3` bundle to your DAW's VST3 plugin folder:
-   - **Windows**: `C:\Program Files\Common Files\VST3\`
-   - **Linux**: `~/.vst3/` or `/usr/lib/vst3/`
+2. Copy the `.vst3` bundle to your DAW's VST3 folder:
+   - Windows: `C:\Program Files\Common Files\VST3\`
+   - Linux: `~/.vst3/` or `/usr/lib/vst3/`
 3. Rescan plugins in your DAW
-4. Load **PHU BEAT SYNC MULTI SCOPE** on any number of tracks
+4. Load **PHU BEAT SYNC MULTI SCOPE** on any tracks you want to compare
 
-> **No external dependencies** — the plugin binary is self-contained.
+No external dependencies — the binary is self-contained.
 
-## Usage
+### Setup
 
-1. Insert the plugin on two or more tracks (or send busses) you want to compare
-2. Enable **Broadcast** on every instance you want to share — the signal is sent over UDP multicast on `239.255.42.1:49423` (local network only)
-3. Enable **Show Remote** on the instances where you want to see the other tracks
-4. Use the **Range** dropdown to zoom the beat window (all visible instances stay aligned)
-5. Optionally enable **Display Filters** to focus on a frequency sub-band in the display
-6. Enable **RMS Envelope** and/or **Cancellation** in the Analysis group to diagnose phase and level relationships
+```
+Track 1  →  [plugin]  Broadcast ✔  Show Remote ✔  Ch 1  "Kick"
+Track 2  →  [plugin]  Broadcast ✔  Show Remote ✔  Ch 2  "Snare"
+Track 3  →  [plugin]  Broadcast ✔  Show Remote ✔  Ch 3  "Bass"
+```
+
+Every instance that has **Broadcast** enabled sends its waveform via UDP multicast (`239.255.42.1:49423`) at ~30 Hz. All instances see each other automatically — no pairing required. Broadcasting continues even when the plugin window is closed.
+
+### Controls
+
+**Network group**
+
+| Control | Function |
+|---|---|
+| Show Local | Hide/show the local waveform |
+| Show Remote | Hide/show all received remote waveforms |
+| Broadcast | Enable/disable sending this instance's waveform |
+| B/Cast on/off | Broadcast-only mode — UI display disabled, CPU freed |
+| Peers B/Cast Only | Sends a command to all peers to enter broadcast-only mode |
+
+**Identity group**
+
+Each instance gets a channel number (Ch 1–8), a free-text label, and a colour. These are transmitted with every packet; all other instances use them to label and colour their overlaid waveforms.
+
+![Channel selection](doc/image-select-channel.png)
+
+**Range**
+
+Selects the beat window shown — 1, 2, 4 or 8 beats. At high BPM, wider ranges are automatically greyed out when the buffer would be too large to be reliable.
+
+**Display Filters**
+
+HP and LP filters applied only to the display signal — the audio path is unaffected. Useful for isolating a frequency band without changing the mix.
+
+**Analysis**
+
+- 〰 **RMS Envelope** — step lines at every 1/16-note showing RMS level of the combined (local + all visible remote) signals
+- 🟩 **Cancellation** — colour bar at the bottom of the scope indicating phase cancellation between instances: green = in-phase, yellow = partial, red = heavy cancellation
+
+![Broadcast-only mode](doc/image-broadcast-mode.png)
+
+*In broadcast-only mode the scope display is replaced by a status overlay. All display computations stop, reducing CPU impact for instances that only need to feed data to others.*
+
+---
 
 ## Building
 
@@ -64,8 +91,8 @@ A JUCE-based VST3 audio plugin that provides a **beat-synced multi-instance osci
 | Tool | Minimum version |
 |---|---|
 | CMake | 3.15 |
-| C++ compiler | C++17 (MSVC 2022, GCC 11, Clang 14) |
-| JUCE | 8.0.12 (included as submodule) |
+| C++ compiler | C++17 — MSVC 2022, GCC 11, or Clang 14 |
+| JUCE | 8.0.12 (included as git submodule) |
 
 ### Clone
 
@@ -78,21 +105,25 @@ git submodule update --init --recursive
 ### Windows
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
+cmake --preset vs2026-x64
+cmake --build --preset vs2026-build --config Release
 ```
 
-The `.vst3` bundle is output to `build/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/`.
+Output: `build/vs2026-x64/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/`
 
 ### Linux
 
 ```bash
-sudo bash scripts/install-linux-deps.sh   # install JUCE system dependencies
+sudo bash scripts/install-linux-deps.sh
 cmake --preset linux-release
 cmake --build --preset linux-build
 ```
 
-If the build times out, reduce parallel jobs: `cmake --build --preset linux-build -j2`
+If the build times out: `cmake --build --preset linux-build -j2`
+
+Output: `build/linux-release/src/phu-beat-sync-multi-scope_artefacts/VST3/`
+
+---
 
 ## Architecture
 
@@ -100,178 +131,191 @@ If the build times out, reduce parallel jobs: `cmake --build --preset linux-buil
 
 | Component | Location | Responsibility |
 |---|---|---|
-| `RawSampleBuffer` | `lib/audio/RawSampleBuffer.h` | Position-indexed raw sample ring buffer; maps audio samples to beat position via PPQ. |
-| `BucketSet` | `lib/audio/BucketSet.h` | Partitions the ring buffer into dirty-tracked buckets for RMS and cancellation computation. |
-| `SyncGlobals` | `lib/events/SyncGlobals.h` | DAW sync state (BPM, PPQ, transport); atomic PPQ for UI reads |
-| `MulticastBroadcasterBase` | `lib/network/MulticastBroadcasterBase.h` | Abstract UDP multicast infrastructure: socket management, receiver thread, platform abstraction |
-| `SampleBroadcaster` | `lib/network/SampleBroadcaster.h` | Sends/receives beat-synced raw sample packets; PPQ reference for beat alignment |
-| `ScopeDisplay` | `src/ScopeDisplay.h` | Oscilloscope component: per-instance RawSampleBuffer + BucketSet pipeline, beat-aligned rendering, RMS + cancellation overlays |
-| `DisplayFilterStrip` | `src/DisplayFilterStrip.h` | HP/LP filter controls for the display path |
-| `PluginProcessor` | `src/PluginProcessor.h` | Audio processing, ping-pong broadcast buffer (direct audio-thread send), local SPSC ring for UI handoff |
+| `RawSampleBuffer` | `lib/audio/RawSampleBuffer.h` | Position-addressed overwrite ring buffer. Samples are written at `(int)(fmod(ppq, range)/range × N)`. Size N is computed from `displayBeats`, `bpm` and `sampleRate` in `prepare()`. |
+| `BucketSet` | `lib/audio/BucketSet.h` | Partitions a `RawSampleBuffer` into dirty-tracked `Bucket` ranges. Two kinds: `Rms` (≤128 buckets, one per 1/16-beat) and `Cancel` (≤256 buckets, ~4 ms each). Only dirty buckets are recomputed per frame. |
+| `LinkwitzRileyFilter` | `lib/LinkwitzRileyFilter.h` | 4th-order (48 dB/oct) Linkwitz-Riley HP/LP filter. One independent instance per active ScopeDisplay slot for display-path filtering. |
+| `SyncGlobals` | `lib/events/SyncGlobals.h` | Holds current BPM, sample rate and block-end PPQ. Written on the audio thread; `ppqEndOfBlock` is an `std::atomic<double>` for safe UI-thread reads. Fires `GlobalsEventListener` callbacks on BPM / sample-rate changes. |
+| `MulticastBroadcasterBase` | `lib/network/MulticastBroadcasterBase.h` | Abstract UDP multicast foundation: socket creation, multicast group join/leave, WSA init (Windows, ref-counted), instance ID generation, and receiver-thread lifecycle. |
+| `SampleBroadcaster` | `lib/network/SampleBroadcaster.h` | Extends `MulticastBroadcasterBase`. Sends `RawSamplesPacket` (raw float samples + `ppqOfFirstSample` + `bpm`) **directly from the audio thread** via loopback `sendto()`. Receiver thread stores the latest packet per remote instance (keyed by `instanceID`). Port **49422**. |
+| `CtrlBroadcaster` | `lib/network/CtrlBroadcaster.h` | Extends `MulticastBroadcasterBase`. Sends/receives `CtrlPacket` for instance identity (channel index, label, colour, sample rate) and commands (`PeersBroadcastOnly`). Event types: `Announce`, `LabelChange`, `RangeChange`, `Goodbye`, `PeersBroadcastOnly`. Port **49423**. |
+| `ScopeDisplay` | `src/ScopeDisplay.h` | Oscilloscope component. Maintains up to 8 `InstanceSlot`s (1 local + 7 remote), each owning a `RawSampleBuffer` + `BucketSet(Rms)` + `BucketSet(Cancel)` + two `LinkwitzRileyFilter`s. Scatters buffer data into 4096 display bins per frame. |
+| `DisplayFilterStrip` | `src/DisplayFilterStrip.h` | UI control strip for one HP or LP display filter (enable toggle + frequency knob). |
+| `PluginProcessor` | `src/PluginProcessor.h` | `AudioProcessor` + `juce::Timer`. Owns `SyncGlobals`, `SampleBroadcaster`, `CtrlBroadcaster`, the ping-pong broadcast buffer, and the local SPSC ring. The 30 Hz timer handles CTRL heartbeats only — sample sending happens on the audio thread. |
 
 ### Data Flow
 
 ```
-Audio Thread (processBlock)
-  ├─ Update DAW globals (BPM, PPQ, transport)
-  ├─ Push (monoSample, absolutePpq) to local SPSC ring  →  UI thread RawSampleBuffer[local]
-  └─ Accumulate into ping-pong broadcast slot
-       └─ when full (~33 ms): sendto() directly, flip slot
+Audio Thread  (processBlock)
+  ├─ Read play-head: extract BPM, block-start PPQ, isPlaying
+  ├─ Update SyncGlobals (writes ppqEndOfBlock atomically)
+  ├─ Mix stereo → mono; push (monoSample, absolutePpq) pairs
+  │    into local SPSC ring  [capacity: 2 × BROADCAST_CHUNK_SAMPLES = 12700]
+  └─ Accumulate mono samples into ping-pong broadcast slot
+       └─ slot full (~33 ms / BROADCAST_CHUNK_SAMPLES samples):
+            sendto() loopback multicast → SampleBroadcaster (port 49422)
+            flip to other slot
 
-UDP receive thread (SampleBroadcaster)
-  └─ stores latest RawSamplesPacket per sender
+Network receive thread  (SampleBroadcaster, port 49422)
+  └─ recvfrom() → parse RawSamplesPacket → store in map[instanceID]
+                  (mutex-protected; UI thread snapshots via getReceivedPackets())
 
-Processor Timer (30 Hz)  ← runs even when UI is closed
-  └─ CTRL heartbeat (every 5 s): keeps late-joining peers up to date
+Network receive thread  (CtrlBroadcaster, port 49423)
+  └─ recvfrom() → parse CtrlPacket → update RemoteInstanceInfo map
+                  (mutex-protected; UI thread snapshots via getRemoteInfos())
 
-UI Timer (60 Hz)
+Processor Timer  (30 Hz — runs headlessly when UI is closed)
+  └─ CTRL heartbeat: send Announce if interval elapsed (staggered per-instance phase)
+
+UI Timer  (60 Hz)
   ├─ Drain local SPSC ring
-  │    ├─ apply HP/LP filter to each sample
-  │    ├─ write into RawSampleBuffer[local] at PPQ-mapped index
-  │    └─ mark affected rmsBuckets + cancelBuckets dirty
-  ├─ Consume remote packets (getReceivedPackets)
-  │    for each remote instance (max 7):
-  │    ├─ apply HP/LP filter (per-instance filter state)
-  │    ├─ write into RawSampleBuffer[remote_i] at PPQ-mapped index
-  │    └─ mark affected buckets dirty
-  ├─ Recompute dirty rmsBuckets  →  rms[] per bucket
-  ├─ Recompute dirty cancelBuckets  →  cancelIndex[] per bucket
-  ├─ Scatter RawSampleBuffer[*] → display bins (4096) for waveform rendering
-  └─ Repaint ScopeDisplay
+  │    ├─ Apply HP/LP Linkwitz-Riley filter (per-sample)
+  │    └─ RawSampleBuffer[local].writeAt(ppq-mapped index)
+  │         → mark dirty range in BucketSet(Rms) + BucketSet(Cancel)
+  ├─ getReceivedPackets() → for each remote RawSamplesPacket:
+  │    ├─ Apply HP/LP filter (per-instance filter state)
+  │    └─ RawSampleBuffer[remote_i].writeAt(ppq-mapped index)
+  │         → mark dirty buckets
+  ├─ computeFrame():
+  │    ├─ Recompute dirty Rms buckets  → rms[] per slot
+  │    ├─ Recompute dirty Cancel buckets  → cancellationIndex[] per slot
+  │    └─ Scatter RawSampleBuffer[*] → displayBins[4096] (last-write-wins)
+  └─ repaint ScopeDisplay
 ```
 
-### Remote Beat Alignment
+### Beat Alignment
 
-Each packet carries `ppqOfFirstSample`, `bpm`, and `displayRangeBeats`. The receiver uses these to compute write indices into its own `RawSampleBuffer`:
+Every sample is stored at its absolute beat position using only the PPQ value already carried by the packet:
 
 ```
-normPos  = fmod(absolutePpq, receiverRange) / receiverRange   // [0, 1)
-writeIdx = (int)(normPos × bufferSize)
+normPos  = fmod(absolutePpq, displayRangeBeats) / displayRangeBeats   // [0, 1)
+writeIdx = (int)(normPos × N)                                          // N = buffer size
 ```
 
-Samples are written at their absolute beat position, so a sender with a narrower or wider range than the receiver is automatically aligned to the beat grid.
+`RawSamplesPacket` carries `ppqOfFirstSample` and `bpm`. The receiver reconstructs per-sample PPQ as:
 
-### Cancellation Detector
+```
+ppq_i = ppqOfFirstSample + i × (bpm / (60.0 × sampleRate))
+```
 
-The cancellation detector measures how much the combined signal of all active instances deviates from the sum of their individual levels — a direct indicator of phase cancellation across tracks.
+Because positions are absolute and the buffer size covers exactly one `displayRangeBeats` window, instances with different display ranges remain beat-grid aligned with no drift.
 
-#### Formula
+### Display Filter Pipeline
 
-For each time window of width ~4 ms, the raw cancellation index is:
-
-$$CI = 1 - \frac{\text{RMS}(L + R_1 + R_2 + \cdots)}{\text{RMS}(L) + \text{RMS}(R_1) + \text{RMS}(R_2) + \cdots}$$
-
-The denominator is the maximum RMS the mix *could* have if every instance were perfectly in-phase (triangle inequality). The numerator is the RMS of what you actually get. The ratio is 1 when everything is in-phase and 0 when total cancellation occurs, so $CI \in [0, 1]$.
-
-#### Level weighting
-
-Raw $CI$ values near the noise floor are meaningless — two nearly-silent signals cancelling each other is of no practical concern. A level weight is applied to suppress these spurious readings:
-
-$$CI_w = CI \cdot \sqrt{\min\!\left(1,\;\frac{D}{D_{\text{ref}}}\right)}$$
-
-where $D = \text{RMS}(L) + \sum \text{RMS}(R_i)$ is the total individual energy and $D_{\text{ref}} = 0.1$ (≈ −20 dBFS). The square-root shaping means the weight rises steeply from the noise floor and reaches 1.0 once any slot exceeds −20 dBFS, above which the raw $CI$ is displayed unchanged.
-
-| $D$ | Level weight | Effect on display |
-|---|---|---|
-| 0.01 (−40 dBFS, noise floor) | 0.32 | Strongly suppressed — green |
-| 0.03 (−30 dBFS) | 0.55 | Moderately suppressed |
-| 0.10 (−20 dBFS) | 1.00 | Full CI shown |
-| > 0.10 | 1.00 | No change |
-
-An additional hard noise-floor gate (`sumIndividualRms > 0.01`) skips computation entirely for slots below −40 dBFS, preventing false readings from 8-bit decompression DC offset (~0.004 linear).
-
-#### Colour mapping
-
-The colour bar maps $CI_w$ linearly through three colours:
-
-| $CI_w$ | Colour | Meaning |
-|---|---|---|
-| 0.0 | Green (`#00BB55`) | In-phase — no cancellation |
-| 0.4 | Yellow (`#FFCC00`) | Partial cancellation |
-| 1.0 | Red (`#FF3300`) | Total cancellation |
-
-#### Resolution
-
-256 fixed windows span the full display range, giving a time resolution of approximately:
-
-$$\Delta t \approx \frac{60}{BPM} \cdot \frac{R}{256} \text{ seconds}$$
-
-At 120 BPM with a 4-beat display range: $\Delta t \approx 62.5$ ms. At 1-beat range: $\Delta t \approx 15.6$ ms.
+Each active `InstanceSlot` inside `ScopeDisplay` holds two independent Linkwitz-Riley filter chains (HP + LP, 48 dB/oct). Filters are reset at display-window boundaries (when `floor(ppq / displayRangeBeats)` changes) to prevent boundary transients from polluting the next window.
 
 ### Network Protocol
 
 | Property | Value |
 |---|---|
-| Multicast group | `239.255.42.1` |
-| Port | `49423` |
-| Packet rate | ~30 Hz (33 ms throttle) |
-| Sample encoding | 8-bit linear quantization (`0`=−1.0, `128`=0.0, `255`=+1.0) |
-| Bins per packet | Up to 1024 |
-| Staleness timeout | 3 s (pruned automatically) |
+| Multicast group | `239.255.42.1` (RFC 2365 administratively scoped — stays on LAN) |
+| Sample data port | `49422` (`SampleBroadcaster`) |
+| Control data port | `49423` (`CtrlBroadcaster`) |
+| Sample send rate | Audio-thread driven (~30 Hz at default slot size) |
+| Sample encoding | Raw `float` (no quantization — loopback only) |
+| Control heartbeat | Every 5 s (staggered per-instance phase offset) |
+| Staleness timeout | 3 s — remote instances not heard within this window are pruned |
 
-The multicast group is in the administratively-scoped range (RFC 2365) and will not route beyond the local LAN.
+Note: the loopback-only assumption allows large packets (~25 KB per slot at 192 kHz) without MTU constraints. Cross-machine use would require packet splitting.
 
-## Project Structure
+### Project Layout
 
 ```
 phu-beat-sync-multi-scope/
-├── CMakeLists.txt              # Root CMake config
-├── CMakePresets.json           # Build presets (VS2026/x64, Linux Release)
-├── doc/
-│   └── screenshot.png          # UI screenshot
-├── JUCE/                       # JUCE 8.0.12 (git submodule)
-├── src/                        # Plugin implementation
-│   ├── PluginProcessor.h/cpp   # Audio processing, beat-sync, headless broadcast timer
-│   ├── PluginEditor.h/cpp      # UI layout, control wiring, 60 Hz UI timer
-│   ├── ScopeDisplay.h/cpp      # Beat-synced oscilloscope + analysis overlays
-│   ├── DisplayFilterStrip.h/cpp# HP/LP display filter controls
+├── CMakeLists.txt / CMakePresets.json
+├── doc/                            Screenshots
+├── JUCE/                           JUCE 8.0.12 (git submodule)
+├── src/
+│   ├── PluginProcessor.h/cpp       processBlock, ping-pong broadcast buffer,
+│   │                               SPSC local ring, CTRL heartbeat timer (30 Hz)
+│   ├── PluginEditor.h/cpp          UI layout, 60 Hz refresh timer, control wiring
+│   ├── ScopeDisplay.h/cpp          InstanceSlot pipeline, RMS + cancellation overlays,
+│   │                               display-filter application, scatter → display bins
+│   ├── DisplayFilterStrip.h/cpp    HP/LP display filter UI strip
+│   ├── DebugLogPanel.h/cpp         In-plugin log viewer (debug builds only)
 │   └── CMakeLists.txt
-├── lib/                        # Reusable library components
+├── lib/
 │   ├── audio/
-│   │   ├── AudioSampleFifo.h   # Lock-free sample FIFO (single-writer / single-reader)
-│   │   └── BeatSyncBuffer.h    # Position-indexed display buffer (4096 bins)
+│   │   ├── RawSampleBuffer.h       Position-addressed overwrite ring buffer
+│   │   └── BucketSet.h             Dirty-tracked bucket partitioning (Rms + Cancel kinds)
 │   ├── events/
-│   │   ├── SyncGlobals.h       # BPM / PPQ / transport state (atomic PPQ)
-│   │   └── SyncGlobalsListener.h
+│   │   ├── SyncGlobals.h           BPM / PPQ / transport state; atomic PPQ
+│   │   ├── SyncGlobalsListener.h   Event listener interface
+│   │   ├── Event.h / EventSource.h Typed event infrastructure
 │   ├── network/
-│   │   ├── MulticastBroadcasterBase.h/cpp  # UDP multicast socket + receiver thread
-│   │   └── SampleBroadcaster.h/cpp         # Beat-synced waveform send/receive
-│   ├── debug/
-│   │   └── EditorLogger.h/cpp  # In-plugin debug log viewer
-│   └── CMakeLists.txt
-├── .github/
-│   └── workflows/
-│       ├── build.yml           # CI: Windows + Linux builds, pluginval VST3 validation
-│       └── release.yml         # Release: cross-platform packaging
-└── scripts/
-    └── install-linux-deps.sh   # apt-get installer for JUCE Linux dependencies
+│   │   ├── MulticastBroadcasterBase.h/cpp  UDP multicast socket + receiver thread
+│   │   ├── SampleBroadcaster.h/cpp         Raw sample send/receive (port 49422)
+│   │   └── CtrlBroadcaster.h/cpp           Control / identity events (port 49423)
+│   ├── LinkwitzRileyFilter.h       4th-order Linkwitz-Riley HP/LP filter
+│   ├── StringUtil.h                String helpers (instance ID formatting)
+│   └── debug/
+│       ├── EditorLogger.h/cpp      Logger producer (debug builds only)
+│       ├── DebugLogEventQueue.h    MPSC lock-free log queue
+│       └── DebugLogSink.h          Consumer interface for the log panel
+├── .github/workflows/              CI build + pluginval + release workflows
+└── scripts/install-linux-deps.sh
 ```
+
+---
+
+## Cancellation Detector
+
+The cancellation detector measures deviation of the combined signal from the incoherent sum of individual levels — a direct indicator of phase cancellation across tracks.
+
+### Formula
+
+For each time window of ~4 ms, the raw cancellation index is:
+
+$$CI = 1 - \frac{\text{RMS}(L + R_1 + R_2 + \cdots)}{\text{RMS}(L) + \text{RMS}(R_1) + \text{RMS}(R_2) + \cdots}$$
+
+The denominator is the maximum possible RMS if every instance were perfectly in-phase (triangle inequality). $CI \in [0, 1]$: 0 = no cancellation, 1 = total cancellation.
+
+### Level Weighting
+
+$CI$ values near the noise floor are suppressed to avoid false readings on near-silent signals:
+
+$$CI_w = CI \cdot \sqrt{\min\!\left(1,\;\frac{D}{D_{\text{ref}}}\right)}$$
+
+where $D = \text{RMS}(L) + \sum \text{RMS}(R_i)$ and $D_{\text{ref}} = 0.1$ (≈ −20 dBFS).
+
+| $D$ | Weight | Effect |
+|---|---|---|
+| 0.01 (−40 dBFS) | 0.32 | Strongly suppressed |
+| 0.03 (−30 dBFS) | 0.55 | Moderately suppressed |
+| ≥ 0.10 (−20 dBFS) | 1.00 | Full CI displayed |
+
+A hard gate (`sumIndividualRms > 0.01`) skips computation entirely below −40 dBFS.
+
+### Colour Mapping
+
+| $CI_w$ | Colour | Meaning |
+|---|---|---|
+| 0.0 | `#00BB55` green | In-phase |
+| 0.4 | `#FFCC00` yellow | Partial cancellation |
+| 1.0 | `#FF3300` red | Total cancellation |
+
+### Resolution
+
+256 windows span the full display range:
+
+$$\Delta t \approx \frac{60}{\text{BPM}} \cdot \frac{R}{256} \text{ s}$$
+
+At 120 BPM, 4-beat range: Δt ≈ 62 ms. At 1-beat range: Δt ≈ 15 ms.
+
+---
 
 ## Contributing
 
-Contributions are welcome! Please follow these steps:
+Contributions are welcome.
 
-1. Fork the repository and create your branch from `main`
-2. Follow the existing code style (C++17, JUCE conventions)
-3. Respect the hard rules in [`.github/copilot-instructions.md`](.github/copilot-instructions.md) — especially **never perform network I/O on the audio thread**
-4. Ensure the project builds cleanly on Windows (CI will also test Linux)
-5. Open a pull request with a clear description of the change
+1. Fork and branch from `main`
+2. Follow existing C++17/JUCE code style
+3. Keep to the hard rules in [`.github/copilot-instructions.md`](.github/copilot-instructions.md) — in particular: **no network I/O on the audio thread**
+4. Verify the project builds and passes pluginval before opening a PR
 
-### Reporting Issues
+**Bug reports** — please include DAW name/version, OS, and reproduction steps in a [GitHub Issue](https://github.com/huberp/phu-beat-sync-multi-scope/issues).
 
-Please open a [GitHub Issue](https://github.com/huberp/phu-beat-sync-multi-scope/issues) and include:
-- DAW name and version
-- OS and version
-- Steps to reproduce
-- Screenshot or screen recording if applicable
-
-## Acknowledgements
-
-- [JUCE](https://juce.com) — cross-platform audio application framework
-- [pluginval](https://github.com/Tracktion/pluginval) — VST3 validation used in CI
-- [phu-splitter](https://github.com/huberp/phu-splitter) — multicast networking pattern
-- [phu-compressor](https://github.com/huberp/phu-compressor) — `BeatSyncBuffer` and `SyncGlobals`
+---
 
 ## License
 
-This project is licensed under the **MIT License** — see [LICENSE](LICENSE) for details.
+[MIT](LICENSE)
