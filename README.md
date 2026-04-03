@@ -56,8 +56,8 @@ Every instance that has **Broadcast** enabled sends its waveform via UDP multica
 | Show Local | Hide/show the local waveform |
 | Show Remote | Hide/show all received remote waveforms |
 | Broadcast | Enable/disable sending this instance's waveform |
-| B/Cast on/off | Broadcast-only mode — UI display disabled, CPU freed |
-| Peers B/Cast Only | Sends a command to all peers to enter broadcast-only mode |
+| B/Cast on/off | Broadcast-only mode — UI display disabled, CPU freed. If this instance is only meant for sending it's data to it' peers |
+| Peers B/Cast Only | Sends a command to all peers to enter broadcast-only mode. If this instance is the single instance used for viewing |
 
 **Identity group**
 
