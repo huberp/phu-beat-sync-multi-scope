@@ -42,8 +42,6 @@ A VST3 oscilloscope that loads on multiple DAW tracks simultaneously. All instan
 
 🔬 **Phase cancellation detector** — a fine-grained colour bar (≤ 4 ms resolution) shows inter-instance cancellation continuously, level-weighted to suppress noise-floor artefacts. Not an approximation — it measures the actual RMS deviation from the incoherent sum.
 
-♾️ **Supports 40–∞ BPM, 44.1–192 kHz** — buffer sizing is fully dynamic; no hardcoded sample-rate or tempo assumptions anywhere in the signal path.
-
 ---
 
 ## User Guide
