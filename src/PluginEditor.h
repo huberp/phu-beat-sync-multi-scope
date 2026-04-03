@@ -2,6 +2,7 @@
 
 #include "DisplayFilterStrip.h"
 #include "ScopeDisplay.h"
+#include "DebugLogPanel.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <vector>
 
@@ -33,10 +34,6 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
      */
     void updateDisplayRangeConstraints();
 
-#ifndef NDEBUG
-    void addLogMessage(const juce::String& message);
-#endif
-
   private:
     PhuBeatSyncMultiScopeAudioProcessor& audioProcessor;
 
@@ -53,6 +50,7 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     juce::ToggleButton remoteDisplayToggle;  // Show/hide remote waveforms
     juce::ToggleButton broadcastToggle;       // Enable/disable broadcasting
     juce::TextButton broadcastOnlyToggle;     // Active vs Broadcast-only mode
+    juce::TextButton peersBroadcastOnlyButton; // Sends command to peers to enter broadcast-only mode
 
     // Channel identity controls
     juce::GroupComponent identityGroup;
@@ -98,6 +96,10 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     // Track local instance index so we only call setLocalInstanceIndex() when it changes
     int m_lastLocalInstanceIndex = -1;
 
+    // Track broadcast-only mode transitions so peer-triggered mode changes update
+    // the full UI state (button latch, overlay, disabled controls) immediately.
+    bool m_lastBroadcastOnlyMode = false;
+
     // Minimum gap between HP and LP frequencies (Hz)
     static constexpr float MIN_FREQ_GAP = 10.0f;
 
@@ -113,9 +115,9 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     void syncUIFromProcessorState();
     void applyBroadcastOnlyUiState(bool enabled);
 
-#ifndef NDEBUG
-    juce::TextEditor logTextEditor;
-    juce::Label logLabel;
+#if PHU_DEBUG_UI
+    // Reusable debug log panel with decoupled low-rate UI timer
+    std::unique_ptr<DebugLogPanel> m_debugLogPanel;
 #endif
 
     // APVTS attachment for display range

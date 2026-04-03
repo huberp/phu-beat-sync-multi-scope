@@ -20,6 +20,7 @@ enum class CtrlEventType : uint8_t {
     LabelChange = 0x02,  ///< user changed the channel label
     RangeChange = 0x03,  ///< displayRangeBeats changed
     Goodbye     = 0x04,  ///< releaseResources / shutdown
+  PeersBroadcastOnly = 0x05, ///< request all peers to enter broadcast-only mode
 };
 
 // Wire format for CTRL packets (packed, ~96 bytes).
@@ -130,6 +131,14 @@ class CtrlBroadcaster : public MulticastBroadcasterBase {
     }
 
     /**
+     * Consume one-shot peer command: enter broadcast-only mode.
+     * Returns true once after a matching remote command is received.
+     */
+    bool consumePeersBroadcastOnlyCommand() noexcept {
+      return m_receivedPeersBroadcastOnly.exchange(false, std::memory_order_relaxed);
+    }
+
+    /**
      * Send a CTRL packet to all instances on the multicast group.
      *
      * @param eventType          The type of event triggering this packet
@@ -174,6 +183,9 @@ class CtrlBroadcaster : public MulticastBroadcasterBase {
     /** Counts successfully upserted inbound Ctrl packets since last consumeInboundCount().
      *  Written by receiver thread, consumed by message thread via consumeInboundCount(). */
     std::atomic<uint32_t> m_inboundCtrlPackets{0};
+
+    /** Set by receiver thread when a remote PeersBroadcastOnly command arrives. */
+    std::atomic<bool> m_receivedPeersBroadcastOnly{false};
 };
 
 } // namespace network

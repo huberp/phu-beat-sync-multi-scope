@@ -18,10 +18,12 @@ target_sources(phu-beat-sync-multi-scope PRIVATE
     ScopeDisplay.h
     DisplayFilterStrip.cpp
     DisplayFilterStrip.h
+    $<$<CONFIG:Debug>:DebugLogPanel.cpp>
+    $<$<CONFIG:Debug>:DebugLogPanel.h>
 
     # Debug components (moved to lib/debug/)
-    ../lib/debug/EditorLogger.cpp
-    ../lib/debug/EditorLogger.h
+    $<$<CONFIG:Debug>:../lib/debug/EditorLogger.cpp>
+    $<$<CONFIG:Debug>:../lib/debug/EditorLogger.h>
 
     # Network components with .cpp implementations
     ../lib/network/MulticastBroadcasterBase.cpp
@@ -40,6 +42,8 @@ target_compile_definitions(phu-beat-sync-multi-scope PUBLIC
     JUCE_USE_MP3AUDIOFORMAT=0
     JUCE_USE_OGGVORBIS=0
     JUCE_USE_FLAC=0
+    $<$<CONFIG:Debug>:PHU_DEBUG_UI=1>
+    $<$<NOT:$<CONFIG:Debug>>:PHU_DEBUG_UI=0>
 )
 
 # Prevent Windows.h from defining min/max macros

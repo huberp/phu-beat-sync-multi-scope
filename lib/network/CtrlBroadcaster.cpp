@@ -43,6 +43,8 @@ static const char* ctrlEventTypeToString(const CtrlEventType eventType) {
             return "RangeChange";
         case CtrlEventType::Goodbye:
             return "Goodbye";
+        case CtrlEventType::PeersBroadcastOnly:
+            return "PeersBroadcastOnly";
         default:
             return "Unknown";
     }
@@ -215,6 +217,9 @@ void CtrlBroadcaster::receiverThreadRun() {
                 std::memcpy(info.pluginType, packet.pluginType, 16);
                 info.pluginType[15]    = '\0'; // ensure null-terminated
                 info.pluginVersion     = packet.pluginVersion;
+
+                if (eventType == CtrlEventType::PeersBroadcastOnly)
+                    m_receivedPeersBroadcastOnly.store(true, std::memory_order_relaxed);
 
                 // Increment inbound rate counter (consumed by processor timer EWMA)
                 m_inboundCtrlPackets.fetch_add(1, std::memory_order_relaxed);

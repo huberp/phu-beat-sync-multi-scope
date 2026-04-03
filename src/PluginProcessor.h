@@ -9,7 +9,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 // Forward declarations
-#ifndef NDEBUG
+#if PHU_DEBUG_UI
 namespace phu { namespace debug { class EditorLogger; } }
 #endif
 
@@ -48,7 +48,7 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
-#ifndef NDEBUG
+#if PHU_DEBUG_UI
     phu::debug::EditorLogger* getEditorLogger() const {
         return editorLogger.get();
     }
@@ -72,6 +72,7 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     /** Active mode = false; Broadcast-only mode = true. */
     bool isBroadcastOnlyMode() const { return m_broadcastOnlyMode.load(); }
     void setBroadcastOnlyMode(bool enabled);
+    void requestPeersBroadcastOnlyMode();
 
     // Control broadcaster (instance identity, sample rate, label)
     CtrlBroadcaster& getCtrlBroadcaster() { return m_ctrlBroadcaster; }
@@ -142,7 +143,7 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     // DAW synchronization globals
     phu::events::SyncGlobals m_syncGlobals;
 
-#ifndef NDEBUG
+#if PHU_DEBUG_UI
     std::unique_ptr<phu::debug::EditorLogger> editorLogger;
 #endif
 

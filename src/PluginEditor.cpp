@@ -1,7 +1,7 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 
-#ifndef NDEBUG
+#if PHU_DEBUG_UI
 #include "../lib/debug/EditorLogger.h"
 #endif
 
@@ -15,8 +15,8 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
       audioProcessor(p),
       hpFilterStrip("HP", p.getAPVTS(), "display_hp_enabled", "display_hp_freq"),
       lpFilterStrip("LP", p.getAPVTS(), "display_lp_enabled", "display_lp_freq") {
-    // Window size
-    setSize(800, 612);
+    // NOTE: setSize() is called at the END of the constructor so that all child
+    // components (including the debug panel) exist when resized() first fires.
 
     // --- Scope Display ---
     addAndMakeVisible(scopeDisplay);
@@ -91,12 +91,18 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
                                        juce::dontSendNotification);
     broadcastOnlyToggle.onClick = [this]() {
         const bool enabled = broadcastOnlyToggle.getToggleState();
-        if (enabled)
-            broadcastToggle.setToggleState(true, juce::dontSendNotification);
         audioProcessor.setBroadcastOnlyMode(enabled);
         applyBroadcastOnlyUiState(enabled);
     };
     addAndMakeVisible(broadcastOnlyToggle);
+
+    peersBroadcastOnlyButton.setButtonText("Peers B/Cast Only");
+    peersBroadcastOnlyButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF3A355F));
+    peersBroadcastOnlyButton.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+    peersBroadcastOnlyButton.onClick = [this]() {
+        audioProcessor.requestPeersBroadcastOnlyMode();
+    };
+    addAndMakeVisible(peersBroadcastOnlyButton);
 
     // --- Channel Identity Group ---
     identityGroup.setText("Identity");
@@ -229,25 +235,28 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
     audioProcessor.getAPVTS().addParameterListener("display_hp_freq", this);
     audioProcessor.getAPVTS().addParameterListener("display_lp_freq", this);
 
-#ifndef NDEBUG
-    // --- Debug Log ---
-    logLabel.setText("Debug Log:", juce::dontSendNotification);
-    addAndMakeVisible(logLabel);
+#if PHU_DEBUG_UI
+    // --- Debug Log Panel ---
+    // Create reusable DebugLogPanel with independent low-rate UI timer
+    m_debugLogPanel = std::make_unique<DebugLogPanel>(&audioProcessor);
+    m_debugLogPanel->setFlushRateHz(10.0);  // Drain queue at 10 Hz (~100 ms batches)
+    addAndMakeVisible(*m_debugLogPanel);
 
-    logTextEditor.setMultiLine(true);
-    logTextEditor.setReadOnly(true);
-    logTextEditor.setScrollbarsShown(true);
-    logTextEditor.setCaretVisible(false);
-    logTextEditor.setFont(juce::Font(juce::FontOptions(11.0f)));
-    addAndMakeVisible(logTextEditor);
-
-    // Register with logger
+    // Attach logger to panel
     if (auto* logger = audioProcessor.getEditorLogger())
-        logger->setEditor(this);
+        m_debugLogPanel->attachLogger(logger);
 #endif
 
     // Restore toggle states from processor
     syncUIFromProcessorState();
+
+    // Set window size LAST — ensures all children (including debug panel) exist
+    // when resized() fires for the first time.
+#if PHU_DEBUG_UI
+    setSize(800, 732);  // Extra 120px for debug panel
+#else
+    setSize(800, 612);
+#endif
 
     // Start UI refresh timer at 60 Hz
     startTimerHz(60);
@@ -259,9 +268,10 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::~PhuBeatSyncMultiScopeAudioProcessorE
     audioProcessor.getAPVTS().removeParameterListener("display_hp_freq", this);
     audioProcessor.getAPVTS().removeParameterListener("display_lp_freq", this);
 
-#ifndef NDEBUG
-    if (auto* logger = audioProcessor.getEditorLogger())
-        logger->clearEditor();
+#if PHU_DEBUG_UI
+    // Detach logger from panel (panel destructor stops its timer)
+    if (m_debugLogPanel)
+        m_debugLogPanel->detachLogger();
 #endif
 }
 
@@ -276,7 +286,7 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::paint(juce::Graphics& g) {
     g.setColour(juce::Colours::white);
     g.setFont(juce::Font(juce::FontOptions(28.0f)).boldened());
     auto titleArea = getLocalBounds().removeFromTop(40).reduced(10, 0);
-    titleArea.removeFromLeft(150); // Reserve top-left space for B/Cast mode button
+    titleArea.removeFromLeft(312); // Reserve top-left space for mode + peer command buttons
     g.drawText("PHU BEAT SYNC MULTI SCOPE", titleArea,
                juce::Justification::centred);
 }
@@ -287,6 +297,8 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     // Title bar
     auto titleBar = area.removeFromTop(40).reduced(10, 6);
     broadcastOnlyToggle.setBounds(titleBar.removeFromLeft(128));
+    titleBar.removeFromLeft(8);
+    peersBroadcastOnlyButton.setBounds(titleBar.removeFromLeft(168));
 
     // Controls strip (top)
     auto controlStrip = area.removeFromTop(56);
@@ -362,12 +374,13 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     // Main display area
     area.reduce(10, 5);
 
-#ifndef NDEBUG
-    // Debug log at bottom
-    auto logArea = area.removeFromBottom(80);
-    logLabel.setBounds(logArea.removeFromTop(16));
-    logTextEditor.setBounds(logArea);
-    area.removeFromBottom(5);
+#if PHU_DEBUG_UI
+    // Debug log panel at bottom with independent low-rate timer
+    if (m_debugLogPanel) {
+        auto logArea = area.removeFromBottom(120);
+        logArea.removeFromBottom(5);
+        m_debugLogPanel->setBounds(logArea);
+    }
 #endif
 
     // Scope display fills remaining space
@@ -379,11 +392,13 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
 // ============================================================================
 
 void PhuBeatSyncMultiScopeAudioProcessorEditor::syncUIFromProcessorState() {
+    const bool broadcastOnlyMode = audioProcessor.isBroadcastOnlyMode();
+
     broadcastToggle.setToggleState(audioProcessor.isBroadcastEnabled(),
                                    juce::dontSendNotification);
     remoteDisplayToggle.setToggleState(audioProcessor.isReceiveEnabled(),
                                        juce::dontSendNotification);
-    broadcastOnlyToggle.setToggleState(audioProcessor.isBroadcastOnlyMode(),
+    broadcastOnlyToggle.setToggleState(broadcastOnlyMode,
                                        juce::dontSendNotification);
 
     // Channel identity
@@ -402,7 +417,8 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::syncUIFromProcessorState() {
     scopeDisplay.setRemoteDisplayEnabled(audioProcessor.isReceiveEnabled());
     scopeDisplay.setLocalColour(colour);
 
-    applyBroadcastOnlyUiState(audioProcessor.isBroadcastOnlyMode());
+    applyBroadcastOnlyUiState(broadcastOnlyMode);
+    m_lastBroadcastOnlyMode = broadcastOnlyMode;
 }
 
 // ============================================================================
@@ -427,6 +443,11 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
     const bool  lpEnabledNow = m_pLpEnabled->load(std::memory_order_relaxed) > 0.5f;
 
     const bool broadcastOnlyMode = audioProcessor.isBroadcastOnlyMode();
+    if (broadcastOnlyMode != m_lastBroadcastOnlyMode) {
+        applyBroadcastOnlyUiState(broadcastOnlyMode);
+        m_lastBroadcastOnlyMode = broadcastOnlyMode;
+    }
+
     if (broadcastOnlyMode)
         return;
 
@@ -528,16 +549,12 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::applyBroadcastOnlyUiState(bool e
     amplitudeSlider.setEnabled(!enabled);
 
     if (enabled) {
-        broadcastToggle.setToggleState(true, juce::dontSendNotification);
-        broadcastToggle.setEnabled(false);
         scopeDisplay.setLocalDisplayEnabled(false);
         scopeDisplay.setRemoteDisplayEnabled(false);
         scopeDisplay.setBroadcastOnlyOverlayEnabled(true);
         scopeDisplay.clearRemoteInstances();
         m_lastRemoteEnabled = false;
     } else {
-        broadcastToggle.setEnabled(true);
-        broadcastToggle.setToggleState(audioProcessor.isBroadcastEnabled(), juce::dontSendNotification);
         scopeDisplay.setLocalDisplayEnabled(localDisplayToggle.getToggleState());
         scopeDisplay.setRemoteDisplayEnabled(remoteDisplayToggle.getToggleState());
         scopeDisplay.setBroadcastOnlyOverlayEnabled(false);
@@ -634,14 +651,3 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::parameterChanged(
         }
     });
 }
-
-// ============================================================================
-// Debug Log
-// ============================================================================
-
-#ifndef NDEBUG
-void PhuBeatSyncMultiScopeAudioProcessorEditor::addLogMessage(const juce::String& message) {
-    logTextEditor.moveCaretToEnd();
-    logTextEditor.insertTextAtCaret(message + "\n");
-}
-#endif

@@ -5,7 +5,7 @@
 #include <cmath>
 #include <cstring>
 
-#ifndef NDEBUG
+#if PHU_DEBUG_UI
 #include "../lib/debug/EditorLogger.h"
 #endif
 
@@ -29,7 +29,7 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
                          .withInput("Input", juce::AudioChannelSet::stereo(), true)
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "Parameters", createParameterLayout()) {
-#ifndef NDEBUG
+#if PHU_DEBUG_UI
     editorLogger = std::make_unique<phu::debug::EditorLogger>();
 #endif
 
@@ -42,7 +42,7 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
     // Initialize ctrl broadcaster networking
     m_ctrlBroadcaster.initialize();
 
-#ifndef NDEBUG
+#if PHU_DEBUG_UI
     // Connect the editor logger for network debug output
     if (editorLogger)
         m_ctrlBroadcaster.setEditorLogger(editorLogger.get());
@@ -191,11 +191,6 @@ void PhuBeatSyncMultiScopeAudioProcessor::prepareToPlay(double sampleRate, int s
     // Reset deadline: startup Announce was just sent — don't fire again until
     // a full adaptive interval has elapsed.
     m_nextCtrlHeartbeatMs = getProcessorTimeMs() + m_ctrlHeartbeatIntervalMs;
-
-#ifndef NDEBUG
-    if (editorLogger)
-        editorLogger->markCurrentThreadAsAudioThread();
-#endif
 }
 
 void PhuBeatSyncMultiScopeAudioProcessor::releaseResources() {
@@ -301,6 +296,10 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
 // ============================================================================
 
 void PhuBeatSyncMultiScopeAudioProcessor::timerCallback() {
+    // --- Apply remote peer commands even when editor is closed ---
+    if (m_ctrlBroadcaster.consumePeersBroadcastOnlyCommand())
+        setBroadcastOnlyMode(true);
+
     // --- Sync channel index if user changed it since last heartbeat ---
     const int currentIdx = getInstanceIndex();
     if (currentIdx != m_lastBroadcastInstanceIndex)
@@ -406,6 +405,22 @@ void PhuBeatSyncMultiScopeAudioProcessor::setBroadcastOnlyMode(bool enabled) {
     } else {
         m_broadcastOnlyMode.store(false, std::memory_order_relaxed);
         setReceiveEnabled(m_receiveEnabledWhenActive.load(std::memory_order_relaxed));
+    }
+}
+
+void PhuBeatSyncMultiScopeAudioProcessor::requestPeersBroadcastOnlyMode() {
+    // Localhost UDP is reliable in practice, but send a short burst to make
+    // the peer command resilient to occasional packet loss.
+    for (int i = 0; i < 3; ++i) {
+        m_ctrlBroadcaster.sendCtrl(
+            phu::network::CtrlEventType::PeersBroadcastOnly,
+            m_channelLabel.data(),
+            static_cast<float>(m_displayRangeBeats.load()),
+            static_cast<float>(m_syncGlobals.getBPM()),
+            m_currentSampleRate,
+            static_cast<uint32_t>(m_currentMaxBufSize),
+            m_colourRGBA,
+            PLUGIN_TYPE, PLUGIN_VERSION);
     }
 }
 

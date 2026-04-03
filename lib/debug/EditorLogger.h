@@ -1,11 +1,12 @@
 #pragma once
 
-#ifndef NDEBUG // Debug builds only
+#if PHU_DEBUG_UI // Debug builds only
 
-#include <array>
 #include <atomic>
 #include <juce_core/juce_core.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "DebugLogEventQueue.h"
+#include "DebugLogSink.h"
 
 // Forward declaration
 class PhuBeatSyncMultiScopeAudioProcessorEditor;
@@ -14,71 +15,92 @@ namespace phu {
 namespace debug {
 
 /**
- * EditorLogger
+ * EditorLogger (Refactored)
  *
- * Custom JUCE Logger that forwards log messages to the plugin editor's log view.
- * Thread-safe and uses AsyncUpdater to ensure GUI updates happen on the message thread.
+ * Custom JUCE Logger that forwards log messages to a DebugLogSink via a lock-free MPSC queue.
+ * Thread-safe; all writers (audio and non-audio threads) push to shared queue.
+ * Consumer (DebugLogPanel UI timer) drains queue in batches at independent rate.
+ * No AsyncUpdater; sink manages its own UI update cadence.
  *
  * Usage:
- *   editorLogger->logMessage("Your message");
- *   // or
- *   LOG_MESSAGE(editorLogger, "Your message");
+ *   auto logger = std::make_unique<EditorLogger>();
+ *   logger->setSink(&myLogPanel);
+ *   juce::Logger::setCurrentLogger(logger.get());
+ *   LOG_MESSAGE(logger, "Message from any thread");
+ *
+ * Design:
+ * - All threads call logMessage() → tryPush to MPSC queue
+ * - Sink calls getQueueBatch() at its own rate (e.g., 8–12 Hz)
+ * - Dropped messages tracked and reported on overflow
  */
-class EditorLogger : public juce::Logger, public juce::AsyncUpdater {
+class EditorLogger : public juce::Logger {
   public:
     EditorLogger() = default;
     ~EditorLogger() override = default;
 
     /**
-     * Mark the calling thread as the audio thread for this plugin instance.
+     * Set the sink that will consume batched log messages
      */
-    void markCurrentThreadAsAudioThread() noexcept;
+    void setSink(DebugLogSink* sink) noexcept
+    {
+        m_sink.store(sink, std::memory_order_release);
+    }
 
     /**
-     * Set the editor that will receive log messages
+     * Get current sink (for verification/debugging)
      */
-    void setEditor(PhuBeatSyncMultiScopeAudioProcessorEditor* editor);
-
-    /**
-     * Clear the editor reference (call when editor is destroyed)
-     */
-    void clearEditor();
+    DebugLogSink* getSink() const noexcept
+    {
+        return m_sink.load(std::memory_order_acquire);
+    }
 
     /**
      * Logger override - called from any thread
+     * Atomically tries to push message to MPSC queue; drops and counts on overflow
      */
     void logMessage(const juce::String& message) override;
 
-  protected:
     /**
-     * AsyncUpdater override - called on message thread
+     * Drain up to maxItems messages from the queue into the provided output span.
+     * Single-consumer operation; typically called by the sink's UI timer.
+     *
+     * @param out Output span to fill with LogEntry copies
+     * @param maxItems Maximum number to pop (typically 32)
+     * @return Number of messages actually popped
      */
-    void handleAsyncUpdate() override;
+    int getQueueBatch(juce::Span<DebugLogEventQueue::LogEntry> out, int maxItems) noexcept
+    {
+        return m_queue.popBatch(out, maxItems);
+    }
+
+    /**
+     * Query queue fill ratio (for diagnostics)
+     */
+    double getQueueFillRatio() const noexcept
+    {
+        return m_queue.getApproximateFillRatio();
+    }
+
+    /**
+     * Get count of messages dropped due to queue overflow
+     */
+    uint32_t getDroppedMessageCount() const noexcept
+    {
+        return m_droppedMessages.load(std::memory_order_acquire);
+    }
+
+    /**
+     * Reset dropped message counter (optional; for diagnostics)
+     */
+    void resetDroppedMessageCount() noexcept
+    {
+        m_droppedMessages.store(0, std::memory_order_release);
+    }
 
   private:
-    static constexpr int rtQueueCapacity = 1024;
-    static constexpr size_t rtMaxMessageBytes = 256;
-
-    struct RtSlot {
-        std::array<char, rtMaxMessageBytes> text{};
-        uint16_t length = 0;
-    };
-
-    juce::AbstractFifo rtFifo{rtQueueCapacity};
-    std::array<RtSlot, rtQueueCapacity> rtSlots;
-    std::atomic<uint32_t> rtDroppedMessages{0};
-
-    std::atomic<uintptr_t> audioThreadId{0};
-
-    juce::CriticalSection nonRealtimeLock;
-    juce::StringArray pendingMessages;
-
-    std::atomic<bool> asyncUpdateRequested{false};
-
-    juce::Component::SafePointer<PhuBeatSyncMultiScopeAudioProcessorEditor> editor;
-
-    void requestAsyncUpdate() noexcept;
-    void pushRealtime(const juce::String& message) noexcept;
+    DebugLogEventQueue m_queue;
+    std::atomic<DebugLogSink*> m_sink { nullptr };
+    std::atomic<uint32_t> m_droppedMessages { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EditorLogger)
 };
@@ -102,4 +124,4 @@ class EditorLogger : public juce::Logger, public juce::AsyncUpdater {
         (void)(msg);                                                                               \
     } while (0)
 
-#endif // !NDEBUG
+#endif // PHU_DEBUG_UI

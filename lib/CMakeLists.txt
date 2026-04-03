@@ -23,4 +23,6 @@ target_sources(BeatSyncLib INTERFACE
 
     # Debug components (debug builds only)
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/EditorLogger.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/DebugLogEventQueue.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/DebugLogSink.h
 )
