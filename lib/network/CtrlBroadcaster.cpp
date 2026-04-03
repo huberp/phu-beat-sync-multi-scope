@@ -84,6 +84,13 @@ bool CtrlBroadcaster::sendCtrl(CtrlEventType eventType, const char* label,
         sendto(sendSocket, reinterpret_cast<const char*>(&packet), sizeof(packet), 0,
                reinterpret_cast<struct sockaddr*>(addr), sizeof(sockaddr_in));
 
+#ifndef NDEBUG
+    if (bytesSent <= 0)
+        std::fprintf(stderr,
+            "[CtrlBroadcaster] sendCtrl failed (event=%u, bytesSent=%d)\n",
+            static_cast<unsigned>(eventType), bytesSent);
+#endif
+
     return bytesSent > 0;
 }
 
