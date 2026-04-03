@@ -46,7 +46,9 @@ SampleBroadcaster::SampleBroadcaster()
 void SampleBroadcaster::onShutdown() {
     std::lock_guard<std::mutex> lock(receiveMutex);
     latestPackets.clear();
+#ifndef NDEBUG
     lastSeqNums.clear();
+#endif
 }
 
 // ============================================================================
@@ -80,6 +82,13 @@ bool SampleBroadcaster::broadcastRawSamples(const float* samples, int numSamples
     int bytesSent =
         sendto(sendSocket, reinterpret_cast<const char*>(&packet), static_cast<size_t>(payloadSize), 0,
                reinterpret_cast<struct sockaddr*>(addr), sizeof(sockaddr_in));
+
+#ifndef NDEBUG
+    if (bytesSent <= 0)
+        std::fprintf(stderr,
+            "[SampleBroadcaster] broadcastRawSamples failed (numSamples=%d, bytesSent=%d)\n",
+            numSamples, bytesSent);
+#endif
 
     return bytesSent > 0;
 }

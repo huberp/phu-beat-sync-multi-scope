@@ -46,7 +46,7 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
     // plugin editor is closed. Broadcast sample packets are now sent directly
     // from the audio thread (ping-pong buffer), so the timer no longer drains
     // any ring buffer.
-    startTimerHz(30);
+    startTimerHz(PROCESSOR_TIMER_HZ);
 }
 
 PhuBeatSyncMultiScopeAudioProcessor::~PhuBeatSyncMultiScopeAudioProcessor() {
@@ -141,13 +141,13 @@ void PhuBeatSyncMultiScopeAudioProcessor::prepareToPlay(double sampleRate, int s
     m_currentSampleRate = sampleRate;
     m_currentMaxBufSize = samplesPerBlock;
 
-    // Compute the broadcast slot capacity so each slot covers ~33 ms.
-    // Lower bound of 128 avoids degenerate packet rates at non-standard sample rates.
+    // Compute the broadcast slot capacity so each slot covers ~BROADCAST_SLOT_DURATION_S s.
+    // Lower bound of MIN_BROADCAST_SLOT_SAMPLES avoids degenerate packet rates at non-standard sample rates.
     // Upper bound keeps the write within the struct's samples array.
     const int slotCapacity = juce::jlimit(
-        128,
+        MIN_BROADCAST_SLOT_SAMPLES,
         phu::network::SampleBroadcaster::BROADCAST_CHUNK_SAMPLES,
-        static_cast<int>(std::round(sampleRate * 0.033)));
+        static_cast<int>(std::round(sampleRate * BROADCAST_SLOT_DURATION_S)));
     m_broadcastSlots[0].capacity = slotCapacity;
     m_broadcastSlots[1].capacity = slotCapacity;
     m_broadcastSlots[0].count    = 0;
@@ -399,19 +399,31 @@ void PhuBeatSyncMultiScopeAudioProcessor::changeProgramName(int, const juce::Str
 // State Save / Restore
 // ============================================================================
 
+// Identifier for the child ValueTree node that stores plugin-specific state
+// (separate from APVTS parameters so the two namespaces can't collide).
+static const juce::Identifier kPluginStateId     { "PluginState" };
+static const juce::Identifier kPropBcastEnabled  { "broadcastEnabled" };
+static const juce::Identifier kPropRecvEnabled   { "receiveEnabled" };
+static const juce::Identifier kPropChannelLabel  { "channelLabel" };
+static const juce::Identifier kPropColourR       { "colourR" };
+static const juce::Identifier kPropColourG       { "colourG" };
+static const juce::Identifier kPropColourB       { "colourB" };
+static const juce::Identifier kPropColourA       { "colourA" };
+
 void PhuBeatSyncMultiScopeAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
     auto state = apvts.copyState();
 
-    // Save broadcast/receive enabled state
-    state.setProperty("broadcastEnabled", m_broadcastEnabled.load(), nullptr);
-    state.setProperty("receiveEnabled", m_receiveEnabled.load(), nullptr);
-
-    // Save channel identity
-    state.setProperty("channelLabel", juce::String::fromUTF8(m_channelLabel.data()), nullptr);
-    state.setProperty("colourR", static_cast<int>(m_colourRGBA[0]), nullptr);
-    state.setProperty("colourG", static_cast<int>(m_colourRGBA[1]), nullptr);
-    state.setProperty("colourB", static_cast<int>(m_colourRGBA[2]), nullptr);
-    state.setProperty("colourA", static_cast<int>(m_colourRGBA[3]), nullptr);
+    // Store plugin-specific state in a dedicated child ValueTree node to keep
+    // it separate from APVTS parameter state and avoid property name collisions.
+    juce::ValueTree pluginState(kPluginStateId);
+    pluginState.setProperty(kPropBcastEnabled, m_broadcastEnabled.load(),      nullptr);
+    pluginState.setProperty(kPropRecvEnabled,  m_receiveEnabled.load(),        nullptr);
+    pluginState.setProperty(kPropChannelLabel, juce::String::fromUTF8(m_channelLabel.data()), nullptr);
+    pluginState.setProperty(kPropColourR,      static_cast<int>(m_colourRGBA[0]), nullptr);
+    pluginState.setProperty(kPropColourG,      static_cast<int>(m_colourRGBA[1]), nullptr);
+    pluginState.setProperty(kPropColourB,      static_cast<int>(m_colourRGBA[2]), nullptr);
+    pluginState.setProperty(kPropColourA,      static_cast<int>(m_colourRGBA[3]), nullptr);
+    state.addChild(pluginState, -1, nullptr);
 
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
@@ -427,24 +439,27 @@ void PhuBeatSyncMultiScopeAudioProcessor::setStateInformation(const void* data, 
             // Sync channel index after state is restored (instance_channel may have changed)
             syncInstanceIndexToBroadcasters();
 
-            // Restore broadcast/receive enabled state
-            if (state.hasProperty("broadcastEnabled"))
-                setBroadcastEnabled(static_cast<bool>(state.getProperty("broadcastEnabled")));
-            if (state.hasProperty("receiveEnabled"))
-                setReceiveEnabled(static_cast<bool>(state.getProperty("receiveEnabled")));
+            // Restore plugin-specific state.  Try the dedicated child node first
+            // (current format); fall back to flat properties for backward compatibility
+            // with states saved before this change.
+            const auto pluginState = state.getChildWithName(kPluginStateId);
+            const auto& src = pluginState.isValid() ? pluginState : state;
 
-            // Restore channel identity
-            if (state.hasProperty("channelLabel"))
-                copyLabelToBuffer(state.getProperty("channelLabel").toString(),
+            if (src.hasProperty(kPropBcastEnabled))
+                setBroadcastEnabled(static_cast<bool>(src.getProperty(kPropBcastEnabled)));
+            if (src.hasProperty(kPropRecvEnabled))
+                setReceiveEnabled(static_cast<bool>(src.getProperty(kPropRecvEnabled)));
+            if (src.hasProperty(kPropChannelLabel))
+                copyLabelToBuffer(src.getProperty(kPropChannelLabel).toString(),
                                   m_channelLabel.data());
-            if (state.hasProperty("colourR"))
-                m_colourRGBA[0] = static_cast<uint8_t>(static_cast<int>(state.getProperty("colourR")));
-            if (state.hasProperty("colourG"))
-                m_colourRGBA[1] = static_cast<uint8_t>(static_cast<int>(state.getProperty("colourG")));
-            if (state.hasProperty("colourB"))
-                m_colourRGBA[2] = static_cast<uint8_t>(static_cast<int>(state.getProperty("colourB")));
-            if (state.hasProperty("colourA"))
-                m_colourRGBA[3] = static_cast<uint8_t>(static_cast<int>(state.getProperty("colourA")));
+            if (src.hasProperty(kPropColourR))
+                m_colourRGBA[0] = static_cast<uint8_t>(static_cast<int>(src.getProperty(kPropColourR)));
+            if (src.hasProperty(kPropColourG))
+                m_colourRGBA[1] = static_cast<uint8_t>(static_cast<int>(src.getProperty(kPropColourG)));
+            if (src.hasProperty(kPropColourB))
+                m_colourRGBA[2] = static_cast<uint8_t>(static_cast<int>(src.getProperty(kPropColourB)));
+            if (src.hasProperty(kPropColourA))
+                m_colourRGBA[3] = static_cast<uint8_t>(static_cast<int>(src.getProperty(kPropColourA)));
         }
     }
 }

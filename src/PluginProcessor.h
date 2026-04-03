@@ -89,6 +89,22 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     bool isReceiveEnabled() const { return m_receiveEnabled.load(); }
     void setReceiveEnabled(bool enabled);
 
+    // ---- Processor timer -------------------------------------------------------
+    /** Timer frequency (Hz) for the processor-owned heartbeat / index-sync timer. */
+    static constexpr int PROCESSOR_TIMER_HZ = 30;
+
+    // ---- Broadcast slot sizing -------------------------------------------------
+    /** Duration (seconds) each ping-pong broadcast slot covers (~33 ms). */
+    static constexpr double BROADCAST_SLOT_DURATION_S = 0.033;
+
+    /** Minimum broadcast slot capacity (samples): avoids degenerate rates at non-standard
+     *  sample rates and ensures at least one full packet per timer tick. */
+    static constexpr int MIN_BROADCAST_SLOT_SAMPLES = 128;
+
+    // ---- Channel label buffer --------------------------------------------------
+    /** Byte capacity of the channel label buffer, including the null terminator. */
+    static constexpr int CHANNEL_LABEL_CAPACITY = 32;
+
     // ---- Phase-3 local sample ring: (monoSample, absolutePpq) pairs --------
     // Audio thread writes one pair per sample; the UI timer drains this ring and
     // forwards each pair to ScopeDisplay::writeLocalSample().  Capacity = 2 ×
@@ -140,7 +156,7 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     CtrlBroadcaster m_ctrlBroadcaster;
 
     // Channel identity (persisted in state)
-    std::array<char, 32> m_channelLabel{};
+    std::array<char, CHANNEL_LABEL_CAPACITY> m_channelLabel{};
     uint8_t m_colourRGBA[4] = {0x00, 0xFF, 0x88, 0xFF}; // default: bright green
 
     // Current DAW stream parameters — updated in prepareToPlay, read by ctrl send helpers
@@ -177,10 +193,11 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     // Sequence number for outgoing RawSamplesPackets (audio thread only)
     uint32_t m_broadcastSeqNum = 0;
 
-    /** Copy a juce::String into the fixed 32-byte label buffer (max 31 chars + null). */
+    /** Copy a juce::String into the fixed label buffer (max CHANNEL_LABEL_CAPACITY-1 chars + null). */
     static void copyLabelToBuffer(const juce::String& label, char* buf) {
-        std::memset(buf, 0, 32);
-        std::strncpy(buf, label.substring(0, 31).toRawUTF8(), 31);
+        std::memset(buf, 0, CHANNEL_LABEL_CAPACITY);
+        std::strncpy(buf, label.substring(0, CHANNEL_LABEL_CAPACITY - 1).toRawUTF8(),
+                     static_cast<size_t>(CHANNEL_LABEL_CAPACITY - 1));
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhuBeatSyncMultiScopeAudioProcessor)

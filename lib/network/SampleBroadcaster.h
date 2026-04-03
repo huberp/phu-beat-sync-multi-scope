@@ -159,8 +159,10 @@ class SampleBroadcaster : public MulticastBroadcasterBase {
     mutable std::mutex receiveMutex;
     std::map<uint32_t, RemoteRawPacket> latestPackets;
 
-    // Per-sender last sequence number for gap detection (receiver thread only)
+    // Per-sender last sequence number for gap detection (receiver thread only, debug builds only)
+#ifndef NDEBUG
     std::map<uint32_t, uint32_t> lastSeqNums;
+#endif
 };
 
 } // namespace network
