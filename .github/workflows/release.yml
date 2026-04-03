@@ -22,7 +22,7 @@ jobs:
           submodules: recursive
 
       - name: Configure CMake
-        run: cmake --preset vs2026-x64
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build Release
         run: cmake --build --preset release
