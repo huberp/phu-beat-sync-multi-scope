@@ -16,12 +16,33 @@ A VST3 oscilloscope that loads on multiple DAW tracks simultaneously. All instan
 
 ## Contents
 
+- [Highlights](#highlights)
 - [User Guide](#user-guide)
 - [Building](#building)
 - [Architecture](#architecture)
 - [Cancellation Detector](#cancellation-detector)
 - [Contributing](#contributing)
 - [License](#license)
+
+---
+
+## Highlights
+
+🎯 **Beat-locked across every instance** — samples are stored at their absolute PPQ position, not in arrival order. Every instance, local or remote, always draws the same beat grid regardless of display range, network jitter, or when it joined the session.
+
+📡 **Two-channel peer protocol — waveform data and live control** — a dedicated sample channel (UDP multicast, port 49422) streams beat-aligned float waveforms between instances while a separate control channel (port 49423) carries per-instance identity, heartbeats, colour assignments, and display-range metadata. Instances announce themselves automatically and are pruned after 3 seconds of silence; no server, no pairing, and no configuration required.
+
+🔇 **Headless broadcast** — the sending side keeps running even when the plugin UI is closed. CPU overhead of a broadcasting instance with no open window is minimal.
+
+⚡ **Broadcast-only mode** — instances that only need to feed data to others can suppress all display computation entirely, freeing CPU while staying visible to peers.
+
+🎨 **Per-instance identity** — each instance carries a user-assigned channel index (Ch 1–8), a free-text label, and a colour. Remote instances are rendered in their own colour with their label, making multi-track comparison readable at a glance.
+
+🎚️ **Display-path filtering** — 48 dB/oct Linkwitz-Riley HP and LP filters applied only to what you see, not to the audio. Isolate a frequency band without touching the mix.
+
+🔬 **Phase cancellation detector** — a fine-grained colour bar (≤ 4 ms resolution) shows inter-instance cancellation continuously, level-weighted to suppress noise-floor artefacts. Not an approximation — it measures the actual RMS deviation from the incoherent sum.
+
+♾️ **Supports 40–∞ BPM, 44.1–192 kHz** — buffer sizing is fully dynamic; no hardcoded sample-rate or tempo assumptions anywhere in the signal path.
 
 ---
 
