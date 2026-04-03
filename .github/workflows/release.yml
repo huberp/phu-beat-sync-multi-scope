@@ -25,7 +25,7 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build Release
-        run: cmake --build --preset release
+        run: cmake --build build --config Release
 
       - name: Validate VST3 with pluginval
         shell: pwsh
@@ -37,7 +37,7 @@ jobs:
           Expand-Archive -Path "pluginval.zip" -DestinationPath "pluginval" -Force
 
           $vst3 = Get-ChildItem -Recurse `
-            -Path "build/vs2026-x64/src/phu-beat-sync-multi-scope_artefacts/Release/VST3" `
+            -Path "build" `
             -Filter "*.vst3" -Directory | Select-Object -First 1 -ExpandProperty FullName
 
           Write-Host "Validating: $vst3"
@@ -51,7 +51,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
 
           $vst3 = Get-ChildItem -Recurse `
-            -Path "build/vs2026-x64/src/phu-beat-sync-multi-scope_artefacts/Release/VST3" `
+            -Path "build" `
             -Filter "*.vst3" -Directory | Select-Object -First 1 -ExpandProperty FullName
 
           Compress-Archive -Path $vst3 -DestinationPath "dist\$zipName" -Force
