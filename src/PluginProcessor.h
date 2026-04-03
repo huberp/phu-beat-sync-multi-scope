@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../lib/StringUtil.h"
 #include "../lib/events/SyncGlobals.h"
 #include "../lib/network/CtrlBroadcaster.h"
 #include "../lib/network/SampleBroadcaster.h"
@@ -67,6 +68,10 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     SampleBroadcaster& getSampleBroadcaster() { return m_sampleBroadcaster; }
     bool isBroadcastEnabled() const { return m_broadcastEnabled.load(); }
     void setBroadcastEnabled(bool enabled);
+
+    /** Active mode = false; Broadcast-only mode = true. */
+    bool isBroadcastOnlyMode() const { return m_broadcastOnlyMode.load(); }
+    void setBroadcastOnlyMode(bool enabled);
 
     // Control broadcaster (instance identity, sample rate, label)
     CtrlBroadcaster& getCtrlBroadcaster() { return m_ctrlBroadcaster; }
@@ -151,6 +156,8 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     SampleBroadcaster m_sampleBroadcaster;
     std::atomic<bool> m_broadcastEnabled{false};
     std::atomic<bool> m_receiveEnabled{true};
+    std::atomic<bool> m_broadcastOnlyMode{false};
+    std::atomic<bool> m_receiveEnabledWhenActive{true};
 
     // Control broadcaster (instance identity)
     CtrlBroadcaster m_ctrlBroadcaster;
@@ -163,8 +170,12 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     double m_currentSampleRate   = 44100.0;
     int    m_currentMaxBufSize   = 512;
 
-    // Heartbeat tracking (message thread only)
-    int64_t m_lastCtrlHeartbeatMs = 0;
+    // Heartbeat scheduling state (message thread only)
+    int64_t m_nextCtrlHeartbeatMs     = 0;    ///< Absolute deadline for next Announce
+    int64_t m_ctrlHeartbeatIntervalMs = CtrlBroadcaster::HEARTBEAT_INTERVAL_MIN_MS; ///< Adaptive interval [MIN, MAX]
+    float   m_inboundRateEwma         = 0.0f; ///< EWMA of inbound Ctrl pkts per timer tick
+    int     m_intervalBackoffTicks    = 0;    ///< Consecutive ticks above high-load threshold
+    int     m_intervalRecoverTicks    = 0;    ///< Consecutive ticks below low-load threshold
 
     // Last instance index broadcast to the network layer (message thread only)
     int m_lastBroadcastInstanceIndex = -1;
@@ -196,8 +207,8 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     /** Copy a juce::String into the fixed label buffer (max CHANNEL_LABEL_CAPACITY-1 chars + null). */
     static void copyLabelToBuffer(const juce::String& label, char* buf) {
         std::memset(buf, 0, CHANNEL_LABEL_CAPACITY);
-        std::strncpy(buf, label.substring(0, CHANNEL_LABEL_CAPACITY - 1).toRawUTF8(),
-                     static_cast<size_t>(CHANNEL_LABEL_CAPACITY - 1));
+        phu::StringUtil::safe_strncpy(buf, label.substring(0, CHANNEL_LABEL_CAPACITY - 1).toRawUTF8(),
+                                      CHANNEL_LABEL_CAPACITY);
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhuBeatSyncMultiScopeAudioProcessor)

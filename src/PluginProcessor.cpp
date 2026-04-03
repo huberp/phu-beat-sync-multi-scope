@@ -42,6 +42,26 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
     // Initialize ctrl broadcaster networking
     m_ctrlBroadcaster.initialize();
 
+#ifndef NDEBUG
+    // Connect the editor logger for network debug output
+    if (editorLogger)
+        m_ctrlBroadcaster.setEditorLogger(editorLogger.get());
+#endif
+
+    // Deterministic per-instance phase offset in [0, HEARTBEAT_INTERVAL_MIN_MS)
+    // derived from a bijective integer hash of the instanceID.  Each instance
+    // gets a unique offset so first heartbeat fires are staggered across the
+    // 5 s window without any randomness or coordination.
+    {
+        uint32_t h = m_ctrlBroadcaster.getInstanceID();
+        h ^= h >> 16;
+        h *= 0x45d9f3bU;
+        h ^= h >> 16;
+        const auto phaseMs = static_cast<int64_t>(
+            h % static_cast<uint32_t>(CtrlBroadcaster::HEARTBEAT_INTERVAL_MIN_MS));
+        m_nextCtrlHeartbeatMs = getProcessorTimeMs() + phaseMs;
+    }
+
     // Start processor-owned timer so CTRL heartbeats continue even when the
     // plugin editor is closed. Broadcast sample packets are now sent directly
     // from the audio thread (ping-pong buffer), so the timer no longer drains
@@ -168,8 +188,9 @@ void PhuBeatSyncMultiScopeAudioProcessor::prepareToPlay(double sampleRate, int s
     // Sync user-assigned channel index to both broadcasters
     syncInstanceIndexToBroadcasters();
 
-    // Reset heartbeat timer so we don't send a redundant Announce too soon
-    m_lastCtrlHeartbeatMs = getProcessorTimeMs();
+    // Reset deadline: startup Announce was just sent — don't fire again until
+    // a full adaptive interval has elapsed.
+    m_nextCtrlHeartbeatMs = getProcessorTimeMs() + m_ctrlHeartbeatIntervalMs;
 
 #ifndef NDEBUG
     if (editorLogger)
@@ -223,7 +244,7 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
         // The UI thread drains this ring to write into RawSampleBuffer[local].
         // AbstractFifo::write() silently reserves fewer slots when the ring is near
         // full; any overflow samples are dropped (ring is sized for 4× headroom).
-        {
+        if (!m_broadcastOnlyMode.load(std::memory_order_relaxed)) {
             const auto scope = m_localRingFifo.write(numSamples);
             for (int i = 0; i < scope.blockSize1; ++i) {
                 m_localRingSamples[static_cast<size_t>(scope.startIndex1 + i)] =
@@ -285,9 +306,47 @@ void PhuBeatSyncMultiScopeAudioProcessor::timerCallback() {
     if (currentIdx != m_lastBroadcastInstanceIndex)
         syncInstanceIndexToBroadcasters();
 
-    // --- Ctrl heartbeat (every 5 s): keeps late-joining peers up to date ---
+    // --- Adaptive Ctrl heartbeat ---
+    // 1. Update EWMA of inbound Ctrl packet rate (packets received since last tick)
+    {
+        constexpr float kAlpha        = 0.07f;  // time constant ≈ 470 ms @ 30 Hz
+        constexpr float kHighThresh   = 2.5f;   // pkts/tick — back off
+        constexpr float kLowThresh    = 0.5f;   // pkts/tick — recover
+        constexpr int   kHystTicks    = 10;     // ticks before a step fires (≈ 330 ms)
+        constexpr int64_t kStepUp     = 500;    // ms added per backoff step
+        constexpr int64_t kStepDown   = 250;    // ms removed per recover step
+
+        const float newCount = static_cast<float>(m_ctrlBroadcaster.consumeInboundCount());
+        m_inboundRateEwma = kAlpha * newCount + (1.0f - kAlpha) * m_inboundRateEwma;
+
+        if (m_inboundRateEwma > kHighThresh) {
+            ++m_intervalBackoffTicks;
+            m_intervalRecoverTicks = 0;
+        } else if (m_inboundRateEwma < kLowThresh) {
+            ++m_intervalRecoverTicks;
+            m_intervalBackoffTicks = 0;
+        } else {
+            m_intervalBackoffTicks = 0;
+            m_intervalRecoverTicks = 0;
+        }
+
+        if (m_intervalBackoffTicks >= kHystTicks) {
+            m_intervalBackoffTicks = 0;
+            m_ctrlHeartbeatIntervalMs = std::min(
+                m_ctrlHeartbeatIntervalMs + kStepUp,
+                CtrlBroadcaster::HEARTBEAT_INTERVAL_MAX_MS);
+        }
+        if (m_intervalRecoverTicks >= kHystTicks) {
+            m_intervalRecoverTicks = 0;
+            m_ctrlHeartbeatIntervalMs = std::max(
+                m_ctrlHeartbeatIntervalMs - kStepDown,
+                CtrlBroadcaster::HEARTBEAT_INTERVAL_MIN_MS);
+        }
+    }
+
+    // 2. Fire on absolute deadline (advance by interval, not by now — preserves phase)
     const int64_t nowMs = getProcessorTimeMs();
-    if (nowMs - m_lastCtrlHeartbeatMs > CtrlBroadcaster::HEARTBEAT_INTERVAL_MS) {
+    if (nowMs >= m_nextCtrlHeartbeatMs) {
         m_ctrlBroadcaster.sendCtrl(
             phu::network::CtrlEventType::Announce,
             m_channelLabel.data(),
@@ -297,7 +356,7 @@ void PhuBeatSyncMultiScopeAudioProcessor::timerCallback() {
             static_cast<uint32_t>(m_currentMaxBufSize),
             m_colourRGBA,
             PLUGIN_TYPE, PLUGIN_VERSION);
-        m_lastCtrlHeartbeatMs = nowMs;
+        m_nextCtrlHeartbeatMs += m_ctrlHeartbeatIntervalMs;
     }
 }
 
@@ -325,7 +384,29 @@ void PhuBeatSyncMultiScopeAudioProcessor::setBroadcastEnabled(bool enabled) {
 
 void PhuBeatSyncMultiScopeAudioProcessor::setReceiveEnabled(bool enabled) {
     m_receiveEnabled.store(enabled);
-    m_sampleBroadcaster.setReceiveEnabled(enabled);
+    const bool broadcastOnly = m_broadcastOnlyMode.load(std::memory_order_relaxed);
+    m_sampleBroadcaster.setReceiveEnabled(broadcastOnly ? false : enabled);
+    m_ctrlBroadcaster.setReceiveEnabled(broadcastOnly ? false : enabled);
+
+    if (!broadcastOnly)
+        m_receiveEnabledWhenActive.store(enabled);
+}
+
+void PhuBeatSyncMultiScopeAudioProcessor::setBroadcastOnlyMode(bool enabled) {
+    const bool wasEnabled = m_broadcastOnlyMode.load(std::memory_order_relaxed);
+    if (wasEnabled == enabled)
+        return;
+
+    if (enabled) {
+        m_receiveEnabledWhenActive.store(m_receiveEnabled.load(std::memory_order_relaxed));
+        m_broadcastOnlyMode.store(true, std::memory_order_relaxed);
+        setBroadcastEnabled(true);
+        m_sampleBroadcaster.setReceiveEnabled(false);
+        m_ctrlBroadcaster.setReceiveEnabled(false);
+    } else {
+        m_broadcastOnlyMode.store(false, std::memory_order_relaxed);
+        setReceiveEnabled(m_receiveEnabledWhenActive.load(std::memory_order_relaxed));
+    }
 }
 
 void PhuBeatSyncMultiScopeAudioProcessor::setChannelLabel(const juce::String& label) {
@@ -409,12 +490,16 @@ static const juce::Identifier kPropColourR       { "colourR" };
 static const juce::Identifier kPropColourG       { "colourG" };
 static const juce::Identifier kPropColourB       { "colourB" };
 static const juce::Identifier kPropColourA       { "colourA" };
+static const juce::Identifier kPropBroadcastOnly { "broadcastOnlyMode" };
 
 void PhuBeatSyncMultiScopeAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
     auto state = apvts.copyState();
 
     // Store plugin-specific state in a dedicated child ValueTree node to keep
     // it separate from APVTS parameter state and avoid property name collisions.
+    while (state.getChildWithName(kPluginStateId).isValid())
+        state.removeChild(state.getChildWithName(kPluginStateId), nullptr);
+
     juce::ValueTree pluginState(kPluginStateId);
     pluginState.setProperty(kPropBcastEnabled, m_broadcastEnabled.load(),      nullptr);
     pluginState.setProperty(kPropRecvEnabled,  m_receiveEnabled.load(),        nullptr);
@@ -423,6 +508,7 @@ void PhuBeatSyncMultiScopeAudioProcessor::getStateInformation(juce::MemoryBlock&
     pluginState.setProperty(kPropColourG,      static_cast<int>(m_colourRGBA[1]), nullptr);
     pluginState.setProperty(kPropColourB,      static_cast<int>(m_colourRGBA[2]), nullptr);
     pluginState.setProperty(kPropColourA,      static_cast<int>(m_colourRGBA[3]), nullptr);
+    pluginState.setProperty(kPropBroadcastOnly, m_broadcastOnlyMode.load(), nullptr);
     state.addChild(pluginState, -1, nullptr);
 
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
@@ -442,7 +528,12 @@ void PhuBeatSyncMultiScopeAudioProcessor::setStateInformation(const void* data, 
             // Restore plugin-specific state.  Try the dedicated child node first
             // (current format); fall back to flat properties for backward compatibility
             // with states saved before this change.
-            const auto pluginState = state.getChildWithName(kPluginStateId);
+            juce::ValueTree pluginState;
+            for (int i = 0; i < state.getNumChildren(); ++i) {
+                auto child = state.getChild(i);
+                if (child.hasType(kPluginStateId))
+                    pluginState = child;
+            }
             const auto& src = pluginState.isValid() ? pluginState : state;
 
             if (src.hasProperty(kPropBcastEnabled))
@@ -460,6 +551,8 @@ void PhuBeatSyncMultiScopeAudioProcessor::setStateInformation(const void* data, 
                 m_colourRGBA[2] = static_cast<uint8_t>(static_cast<int>(src.getProperty(kPropColourB)));
             if (src.hasProperty(kPropColourA))
                 m_colourRGBA[3] = static_cast<uint8_t>(static_cast<int>(src.getProperty(kPropColourA)));
+            if (src.hasProperty(kPropBroadcastOnly))
+                setBroadcastOnlyMode(static_cast<bool>(src.getProperty(kPropBroadcastOnly)));
         }
     }
 }

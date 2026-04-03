@@ -81,6 +81,23 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
     };
     addAndMakeVisible(broadcastToggle);
 
+    broadcastOnlyToggle.setButtonText("B/Cast on/off");
+    broadcastOnlyToggle.setClickingTogglesState(true);
+    broadcastOnlyToggle.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF2A3F66));
+    broadcastOnlyToggle.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFFF9F1C));
+    broadcastOnlyToggle.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+    broadcastOnlyToggle.setColour(juce::TextButton::textColourOnId, juce::Colour(0xFF1A1A1A));
+    broadcastOnlyToggle.setToggleState(audioProcessor.isBroadcastOnlyMode(),
+                                       juce::dontSendNotification);
+    broadcastOnlyToggle.onClick = [this]() {
+        const bool enabled = broadcastOnlyToggle.getToggleState();
+        if (enabled)
+            broadcastToggle.setToggleState(true, juce::dontSendNotification);
+        audioProcessor.setBroadcastOnlyMode(enabled);
+        applyBroadcastOnlyUiState(enabled);
+    };
+    addAndMakeVisible(broadcastOnlyToggle);
+
     // --- Channel Identity Group ---
     identityGroup.setText("Identity");
     addAndMakeVisible(identityGroup);
@@ -258,7 +275,9 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::paint(juce::Graphics& g) {
     // Title
     g.setColour(juce::Colours::white);
     g.setFont(juce::Font(juce::FontOptions(28.0f)).boldened());
-    g.drawText("PHU BEAT SYNC MULTI SCOPE", getLocalBounds().removeFromTop(40),
+    auto titleArea = getLocalBounds().removeFromTop(40).reduced(10, 0);
+    titleArea.removeFromLeft(150); // Reserve top-left space for B/Cast mode button
+    g.drawText("PHU BEAT SYNC MULTI SCOPE", titleArea,
                juce::Justification::centred);
 }
 
@@ -266,7 +285,8 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     auto area = getLocalBounds();
 
     // Title bar
-    area.removeFromTop(40);
+    auto titleBar = area.removeFromTop(40).reduced(10, 6);
+    broadcastOnlyToggle.setBounds(titleBar.removeFromLeft(128));
 
     // Controls strip (top)
     auto controlStrip = area.removeFromTop(56);
@@ -281,16 +301,17 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     controlStrip.removeFromLeft(20); // Spacing
 
     // Remote controls group
-    auto remoteArea = controlStrip.removeFromLeft(370);
+    auto remoteArea = controlStrip.removeFromLeft(360);
     remoteGroup.setBounds(remoteArea);
     auto remoteContent = remoteArea.reduced(10, 0);
     remoteContent.removeFromTop(16); // Space for group title
     remoteContent.removeFromBottom(4);
-    localDisplayToggle.setBounds(remoteContent.removeFromLeft(100));
-    remoteContent.removeFromLeft(6);
-    remoteDisplayToggle.setBounds(remoteContent.removeFromLeft(110));
-    remoteContent.removeFromLeft(6);
-    broadcastToggle.setBounds(remoteContent.removeFromLeft(110));
+    auto networkRow = remoteContent.removeFromTop(20);
+    localDisplayToggle.setBounds(networkRow.removeFromLeft(92));
+    networkRow.removeFromLeft(6);
+    remoteDisplayToggle.setBounds(networkRow.removeFromLeft(100));
+    networkRow.removeFromLeft(6);
+    broadcastToggle.setBounds(networkRow.removeFromLeft(88));
 
     controlStrip.removeFromLeft(8); // Spacing
 
@@ -362,6 +383,8 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::syncUIFromProcessorState() {
                                    juce::dontSendNotification);
     remoteDisplayToggle.setToggleState(audioProcessor.isReceiveEnabled(),
                                        juce::dontSendNotification);
+    broadcastOnlyToggle.setToggleState(audioProcessor.isBroadcastOnlyMode(),
+                                       juce::dontSendNotification);
 
     // Channel identity
     channelLabelEditor.setText(audioProcessor.getChannelLabel(), juce::dontSendNotification);
@@ -378,6 +401,8 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::syncUIFromProcessorState() {
     scopeDisplay.setDisplayRangeBeats(audioProcessor.getDisplayRangeBeats());
     scopeDisplay.setRemoteDisplayEnabled(audioProcessor.isReceiveEnabled());
     scopeDisplay.setLocalColour(colour);
+
+    applyBroadcastOnlyUiState(audioProcessor.isBroadcastOnlyMode());
 }
 
 // ============================================================================
@@ -400,6 +425,10 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
     const float lpFreqNow    = m_pLpFreq->load(std::memory_order_relaxed);
     const bool  hpEnabledNow = m_pHpEnabled->load(std::memory_order_relaxed) > 0.5f;
     const bool  lpEnabledNow = m_pLpEnabled->load(std::memory_order_relaxed) > 0.5f;
+
+    const bool broadcastOnlyMode = audioProcessor.isBroadcastOnlyMode();
+    if (broadcastOnlyMode)
+        return;
 
     // --- Prepare pipeline when display parameters change ---
     const bool pipelineParamsChanged = (bpm != m_lastBpm ||
@@ -485,6 +514,37 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
         scopeDisplay.repaint();
         scopeDisplay.clearNewFrameData();
     }
+}
+
+void PhuBeatSyncMultiScopeAudioProcessorEditor::applyBroadcastOnlyUiState(bool enabled) {
+    broadcastOnlyToggle.setToggleState(enabled, juce::dontSendNotification);
+    displayRangeCombo.setEnabled(!enabled);
+    localDisplayToggle.setEnabled(!enabled);
+    remoteDisplayToggle.setEnabled(!enabled);
+    hpFilterStrip.setEnabled(!enabled);
+    lpFilterStrip.setEnabled(!enabled);
+    rmsToggle.setEnabled(!enabled);
+    cancellationToggle.setEnabled(!enabled);
+    amplitudeSlider.setEnabled(!enabled);
+
+    if (enabled) {
+        broadcastToggle.setToggleState(true, juce::dontSendNotification);
+        broadcastToggle.setEnabled(false);
+        scopeDisplay.setLocalDisplayEnabled(false);
+        scopeDisplay.setRemoteDisplayEnabled(false);
+        scopeDisplay.setBroadcastOnlyOverlayEnabled(true);
+        scopeDisplay.clearRemoteInstances();
+        m_lastRemoteEnabled = false;
+    } else {
+        broadcastToggle.setEnabled(true);
+        broadcastToggle.setToggleState(audioProcessor.isBroadcastEnabled(), juce::dontSendNotification);
+        scopeDisplay.setLocalDisplayEnabled(localDisplayToggle.getToggleState());
+        scopeDisplay.setRemoteDisplayEnabled(remoteDisplayToggle.getToggleState());
+        scopeDisplay.setBroadcastOnlyOverlayEnabled(false);
+        m_lastRemoteEnabled = remoteDisplayToggle.getToggleState();
+    }
+
+    scopeDisplay.repaint();
 }
 
 // ============================================================================

@@ -52,6 +52,7 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     juce::ToggleButton localDisplayToggle;    // Show/hide local waveform
     juce::ToggleButton remoteDisplayToggle;  // Show/hide remote waveforms
     juce::ToggleButton broadcastToggle;       // Enable/disable broadcasting
+    juce::TextButton broadcastOnlyToggle;     // Active vs Broadcast-only mode
 
     // Channel identity controls
     juce::GroupComponent identityGroup;
@@ -110,6 +111,7 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     // to handle hosts that call setStateInformation after createEditor.
     bool m_needsStateSync = true;
     void syncUIFromProcessorState();
+    void applyBroadcastOnlyUiState(bool enabled);
 
 #ifndef NDEBUG
     juce::TextEditor logTextEditor;

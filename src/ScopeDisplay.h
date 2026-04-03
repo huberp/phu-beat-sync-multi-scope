@@ -89,6 +89,9 @@ class ScopeDisplay : public juce::Component {
     void setAmplitudeScale(float scale) { m_amplitudeScale = juce::jlimit(0.5f, 4.0f, scale); }
     float getAmplitudeScale() const { return m_amplitudeScale; }
 
+    /** Show an overlay that indicates broadcast-only mode and suppresses playhead rendering. */
+    void setBroadcastOnlyOverlayEnabled(bool enabled) { m_broadcastOnlyOverlayEnabled = enabled; }
+
     // -------------------------------------------------------------------------
     // Data ingestion (called from the UI timer thread)
     // -------------------------------------------------------------------------
@@ -223,6 +226,7 @@ class ScopeDisplay : public juce::Component {
     bool   m_showRms          = false;
     bool   m_showCancellation = false;
     float  m_amplitudeScale   = 1.0f;
+    bool   m_broadcastOnlyOverlayEnabled = false;
 
     // -------------------------------------------------------------------------
     // Overlay image cache

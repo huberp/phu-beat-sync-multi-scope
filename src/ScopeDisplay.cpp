@@ -615,7 +615,20 @@ void ScopeDisplay::paint(juce::Graphics& g) {
     }
 
     // Playhead
-    drawPlayhead(g, bounds);
+    if (!m_broadcastOnlyOverlayEnabled)
+        drawPlayhead(g, bounds);
+
+    if (m_broadcastOnlyOverlayEnabled) {
+        g.setColour(juce::Colours::black.withAlpha(0.58f));
+        g.fillRect(bounds);
+
+        g.setColour(juce::Colours::white.withAlpha(0.92f));
+        g.setFont(juce::Font(juce::FontOptions(22.0f)).boldened());
+        g.drawText("BROADCAST MODE",
+                   bounds.toNearestInt(),
+                   juce::Justification::centred,
+                   true);
+    }
 
     // Border
     g.setColour(juce::Colour(0xFF333355));

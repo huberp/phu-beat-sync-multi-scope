@@ -2,10 +2,14 @@
 
 #include "MulticastBroadcasterBase.h"
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <mutex>
 #include <vector>
+
+// Forward declaration to avoid circular dependency
+namespace phu { namespace debug { class EditorLogger; } }
 
 namespace phu {
 namespace network {
@@ -87,11 +91,15 @@ class CtrlBroadcaster : public MulticastBroadcasterBase {
     /** UDP port for CTRL multicasts (dedicated, separate from SMPL port 49422). */
     static constexpr int         MULTICAST_PORT        = 49423;
 
-    /** Interval between periodic heartbeat Announce packets. */
-    static constexpr int64_t     HEARTBEAT_INTERVAL_MS = 5000;
+    /** Minimum interval between periodic heartbeat Announce packets. */
+    static constexpr int64_t     HEARTBEAT_INTERVAL_MIN_MS = 5000;
 
-    /** Stale timeout: 3 missed heartbeats — entries pruned in getRemoteInfos(). */
-    static constexpr int64_t     STALE_TIMEOUT_MS      = 15000;
+    /** Maximum interval: reached when sustained inbound Ctrl traffic is high. */
+    static constexpr int64_t     HEARTBEAT_INTERVAL_MAX_MS = 12000;
+
+    /** Stale timeout: raised to ≥ 2× MAX interval so peers at max cadence survive
+     *  at least 2 missed heartbeats before pruning (30 s >> 2 × 12 s). */
+    static constexpr int64_t     STALE_TIMEOUT_MS          = 30000;
 
     /** Protocol version — bumped when wire format changes. */
     static constexpr uint32_t    PROTOCOL_VERSION      = 3;
@@ -101,6 +109,25 @@ class CtrlBroadcaster : public MulticastBroadcasterBase {
 
     CtrlBroadcaster(const CtrlBroadcaster&) = delete;
     CtrlBroadcaster& operator=(const CtrlBroadcaster&) = delete;
+
+    /**
+     * Set the optional editor logger for debug output.
+     * Called from the processor after CtrlBroadcaster construction.
+     */
+    void setEditorLogger(phu::debug::EditorLogger* logger) { m_editorLogger = logger; }
+
+    /** Enable or disable receiving CTRL packets (default: enabled). */
+    void setReceiveEnabled(bool enabled) { receiveEnabled.store(enabled); }
+    bool isReceiveEnabled() const { return receiveEnabled.load(); }
+
+    /**
+     * Atomically read and reset the inbound Ctrl packet counter.
+     * Called once per processor timer tick to feed the EWMA rate estimator.
+     * Thread-safe (receiver thread writes, message thread reads).
+     */
+    uint32_t consumeInboundCount() noexcept {
+        return m_inboundCtrlPackets.exchange(0, std::memory_order_relaxed);
+    }
 
     /**
      * Send a CTRL packet to all instances on the multicast group.
@@ -141,6 +168,12 @@ class CtrlBroadcaster : public MulticastBroadcasterBase {
     std::mutex m_mutex;
     std::map<uint32_t, RemoteInstanceInfo> m_remoteInfos;
     uint32_t m_sequenceNumber = 0;
+    phu::debug::EditorLogger* m_editorLogger = nullptr;
+    std::atomic<bool> receiveEnabled{true};
+
+    /** Counts successfully upserted inbound Ctrl packets since last consumeInboundCount().
+     *  Written by receiver thread, consumed by message thread via consumeInboundCount(). */
+    std::atomic<uint32_t> m_inboundCtrlPackets{0};
 };
 
 } // namespace network

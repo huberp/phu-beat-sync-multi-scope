@@ -1,6 +1,11 @@
 #include "CtrlBroadcaster.h"
 
+#include "../StringUtil.h"
+#include "../debug/EditorLogger.h"
+#include <chrono>
 #include <cstring>
+#include <thread>
+#include <juce_core/juce_core.h>
 
 #ifndef NDEBUG
     #include <cstdio>
@@ -26,6 +31,23 @@ namespace network {
 
 // Protocol magic number: "CTRL" in ASCII
 static constexpr uint32_t CTRL_MAGIC = 0x4354524C;
+
+#ifndef NDEBUG
+static const char* ctrlEventTypeToString(const CtrlEventType eventType) {
+    switch (eventType) {
+        case CtrlEventType::Announce:
+            return "Announce";
+        case CtrlEventType::LabelChange:
+            return "LabelChange";
+        case CtrlEventType::RangeChange:
+            return "RangeChange";
+        case CtrlEventType::Goodbye:
+            return "Goodbye";
+        default:
+            return "Unknown";
+    }
+}
+#endif
 
 // ============================================================================
 // Construction
@@ -68,14 +90,12 @@ bool CtrlBroadcaster::sendCtrl(CtrlEventType eventType, const char* label,
     packet.displayRangeBeats = displayRangeBeats;
     packet.bpm               = bpm;
     if (label != nullptr) {
-        std::strncpy(packet.channelLabel, label, 31);
-        packet.channelLabel[31] = '\0';
+        phu::StringUtil::safe_strncpy(packet.channelLabel, label, 32);
     }
     if (colourRGBA != nullptr)
         std::memcpy(packet.colourRGBA, colourRGBA, 4);
     if (pluginType != nullptr) {
-        std::strncpy(packet.pluginType, pluginType, 15);
-        packet.pluginType[15] = '\0';
+        phu::StringUtil::safe_strncpy(packet.pluginType, pluginType, 16);
     }
     packet.pluginVersion = pluginVersion;
 
@@ -85,10 +105,21 @@ bool CtrlBroadcaster::sendCtrl(CtrlEventType eventType, const char* label,
                reinterpret_cast<struct sockaddr*>(addr), sizeof(sockaddr_in));
 
 #ifndef NDEBUG
-    if (bytesSent <= 0)
-        std::fprintf(stderr,
-            "[CtrlBroadcaster] sendCtrl failed (event=%u, bytesSent=%d)\n",
-            static_cast<unsigned>(eventType), bytesSent);
+    const juce::String eventName = juce::String(ctrlEventTypeToString(eventType));
+    const juce::String labelText = juce::String(packet.channelLabel);
+
+    if (bytesSent <= 0) {
+        auto msg = juce::String("[CtrlBroadcaster] sendCtrl failed (event=") +
+                   eventName + ", ch=" + juce::String(packet.instanceIndex) +
+                   ", label='" + labelText + "', bytesSent=" + juce::String(bytesSent) + ")";
+        LOG_MESSAGE(m_editorLogger, msg);
+    } else {
+        auto msg = juce::String("[CtrlBroadcaster] sent event ") +
+                   eventName + " from instance " + juce::String(packet.instanceID) +
+                   " (ch=" + juce::String(packet.instanceIndex) +
+                   ", label='" + labelText + "')";
+        LOG_MESSAGE(m_editorLogger, msg);
+    }
 #endif
 
     return bytesSent > 0;
@@ -129,6 +160,11 @@ void CtrlBroadcaster::receiverThreadRun() {
     CtrlPacket packet;
 
     while (running.load()) {
+        if (!receiveEnabled.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
+
         // Receive packet (blocking with 100ms timeout set in socket options)
         int bytesReceived =
             recvfrom(recvSocket, reinterpret_cast<char*>(&packet), sizeof(packet), 0,
@@ -149,39 +185,58 @@ void CtrlBroadcaster::receiverThreadRun() {
 
         const CtrlEventType eventType = static_cast<CtrlEventType>(packet.eventType);
 
-        std::lock_guard<std::mutex> lock(m_mutex);
+#ifndef NDEBUG
+        bool shouldLogReceive = false;
+        char loggedLabel[32] = {};
+#endif
 
-        if (eventType == CtrlEventType::Goodbye) {
-            // Immediate offline — do not wait for stale timeout
-            auto infoIt = m_remoteInfos.find(packet.instanceID);
-            if (infoIt != m_remoteInfos.end())
-                infoIt->second.isOnline = false;
-        } else {
-            // Announce, LabelChange, RangeChange — upsert the info record
-            auto& info             = m_remoteInfos[packet.instanceID];
-            info.instanceID        = packet.instanceID;
-            info.instanceIndex     = packet.instanceIndex;
-            info.lastSeenMs        = getCurrentTimeMs();
-            info.isOnline          = true;
-            info.sampleRate        = packet.sampleRate;
-            info.maxBufferSize     = packet.maxBufferSize;
-            info.displayRangeBeats = packet.displayRangeBeats;
-            info.bpm               = packet.bpm;
-            std::memcpy(info.channelLabel, packet.channelLabel, 32);
-            info.channelLabel[31]  = '\0'; // ensure null-terminated
-            std::memcpy(info.colourRGBA, packet.colourRGBA, 4);
-            std::memcpy(info.pluginType, packet.pluginType, 16);
-            info.pluginType[15]    = '\0'; // ensure null-terminated
-            info.pluginVersion     = packet.pluginVersion;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+
+            if (eventType == CtrlEventType::Goodbye) {
+                // Immediate offline — do not wait for stale timeout
+                auto infoIt = m_remoteInfos.find(packet.instanceID);
+                if (infoIt != m_remoteInfos.end())
+                    infoIt->second.isOnline = false;
+            } else {
+                // Announce, LabelChange, RangeChange — upsert the info record
+                auto& info             = m_remoteInfos[packet.instanceID];
+                info.instanceID        = packet.instanceID;
+                info.instanceIndex     = packet.instanceIndex;
+                info.lastSeenMs        = getCurrentTimeMs();
+                info.isOnline          = true;
+                info.sampleRate        = packet.sampleRate;
+                info.maxBufferSize     = packet.maxBufferSize;
+                info.displayRangeBeats = packet.displayRangeBeats;
+                info.bpm               = packet.bpm;
+                std::memcpy(info.channelLabel, packet.channelLabel, 32);
+                info.channelLabel[31]  = '\0'; // ensure null-terminated
+                std::memcpy(info.colourRGBA, packet.colourRGBA, 4);
+                std::memcpy(info.pluginType, packet.pluginType, 16);
+                info.pluginType[15]    = '\0'; // ensure null-terminated
+                info.pluginVersion     = packet.pluginVersion;
+
+                // Increment inbound rate counter (consumed by processor timer EWMA)
+                m_inboundCtrlPackets.fetch_add(1, std::memory_order_relaxed);
 
 #ifndef NDEBUG
-            std::fprintf(stderr,
-                "[CtrlBroadcaster] received event %u from instance %u (label='%s')\n",
-                static_cast<unsigned>(eventType),
-                packet.instanceID,
-                info.channelLabel);
+                shouldLogReceive = true;
+                std::memcpy(loggedLabel, info.channelLabel, sizeof(loggedLabel));
 #endif
+            }
         }
+
+#ifndef NDEBUG
+        if (shouldLogReceive) {
+            const juce::String eventName = juce::String(ctrlEventTypeToString(eventType));
+            auto msg = juce::String("[CtrlBroadcaster] received event ") +
+                       eventName +
+                       " from instance " + juce::String(packet.instanceID) +
+                       " (ch=" + juce::String(packet.instanceIndex) +
+                       ", label='" + juce::String(loggedLabel) + "')";
+            LOG_MESSAGE(m_editorLogger, msg);
+        }
+#endif
     }
 }
 
