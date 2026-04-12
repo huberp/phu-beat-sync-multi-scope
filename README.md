@@ -55,7 +55,8 @@ A VST3 oscilloscope that loads on multiple DAW tracks simultaneously. All instan
 3. Rescan plugins in your DAW
 4. Load **PHU BEAT SYNC MULTI SCOPE** on any tracks you want to compare
 
-No external dependencies — the binary is self-contained.
+**Windows:** Requires the [Microsoft Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe). Already present if Visual Studio 2019 or 2022 is installed.  
+**Linux:** No external dependencies — the binary is self-contained.
 
 ### Setup
 
