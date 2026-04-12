@@ -10,10 +10,10 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Build & package Windows VST3
+  # Build & package Windows x64 VST3
   # ---------------------------------------------------------------------------
-  release-windows:
-    name: Windows VST3
+  release-windows-x64:
+    name: Windows x64 VST3
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -21,8 +21,8 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Configure CMake (x64)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -A x64
 
       - name: Build Release
         run: cmake --build build --config Release
@@ -47,21 +47,62 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}" -replace '^v', ''
-          $zipName = "PHU-BEAT-SYNC-MULTI-SCOPE-windows-${version}.zip"
+          $zipName = "PHU-BEAT-SYNC-MULTI-SCOPE-windows-x64-${version}.zip"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
 
           $vst3 = Get-ChildItem -Recurse `
             -Path "build" `
-            -Filter "*.vst3" -Directory | Select-Object -First 1 -ExpandProperty FullName
+            -Filter "*.vst3" -Directory | Select-Object -First 1
 
-          Compress-Archive -Path $vst3 -DestinationPath "dist\$zipName" -Force
+          Copy-Item -Path $vst3.FullName -Destination "staging" -Recurse
+          Compress-Archive -Path "staging\*" -DestinationPath "dist\$zipName" -Force
           Write-Host "Created dist\$zipName"
-          echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
 
-      - name: Upload Windows artifact
+      - name: Upload Windows x64 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-vst3
+          name: windows-x64-vst3
+          path: dist/*.zip
+
+  # ---------------------------------------------------------------------------
+  # Build & package Windows ARM64 VST3 (cross-compiled on x64 runner)
+  # ---------------------------------------------------------------------------
+  release-windows-arm64:
+    name: Windows ARM64 VST3
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure CMake (ARM64 cross-compile)
+        run: cmake -B build-arm64 -DCMAKE_BUILD_TYPE=Release -A ARM64
+
+      - name: Build Release
+        run: cmake --build build-arm64 --config Release
+
+      - name: Package VST3
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $zipName = "PHU-BEAT-SYNC-MULTI-SCOPE-windows-arm64-${version}.zip"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+
+          $vst3 = Get-ChildItem -Recurse `
+            -Path "build-arm64" `
+            -Filter "*.vst3" -Directory | Select-Object -First 1
+
+          Copy-Item -Path $vst3.FullName -Destination "staging" -Recurse
+          Compress-Archive -Path "staging\*" -DestinationPath "dist\$zipName" -Force
+          Write-Host "Created dist\$zipName"
+
+      - name: Upload Windows ARM64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64-vst3
           path: dist/*.zip
 
   # ---------------------------------------------------------------------------
@@ -103,7 +144,6 @@ jobs:
           echo "Packaging: $VST3_PATH"
           (cd "$(dirname "$VST3_PATH")" && zip -r "$GITHUB_WORKSPACE/dist/$ZIP_NAME" \
             "$(basename "$VST3_PATH")")
-          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
@@ -112,20 +152,26 @@ jobs:
           path: dist/*.zip
 
   # ---------------------------------------------------------------------------
-  # Create GitHub Release and attach both zips
+  # Generate README.pdf, inject into all zips, publish GitHub Release
   # ---------------------------------------------------------------------------
   publish-release:
     name: Publish GitHub Release
-    needs: [release-windows, release-linux]
+    needs: [release-windows-x64, release-windows-arm64, release-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download Windows artifact
+      - name: Download Windows x64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: windows-vst3
+          name: windows-x64-vst3
+          path: dist/
+
+      - name: Download Windows ARM64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-arm64-vst3
           path: dist/
 
       - name: Download Linux artifact
@@ -133,6 +179,18 @@ jobs:
         with:
           name: linux-vst3
           path: dist/
+
+      - name: Generate README.pdf
+        run: |
+          npm install -g md-to-pdf
+          md-to-pdf README.md --dest README.pdf
+
+      - name: Inject README.pdf into all release zips
+        run: |
+          for zip in dist/*.zip; do
+            zip -j "$zip" README.pdf
+            echo "Injected README.pdf into $zip"
+          done
 
       - name: List release assets
         run: ls -lh dist/
@@ -149,11 +207,20 @@ jobs:
 
             ### Installation
 
-            **Windows** — download `PHU-BEAT-SYNC-MULTI-SCOPE-windows-*.zip`, extract and copy
+            **Windows x64** — download `PHU-BEAT-SYNC-MULTI-SCOPE-windows-x64-*.zip`, extract and copy
+            `PHU BEAT SYNC MULTI SCOPE.vst3` to `C:\Program Files\Common Files\VST3\`.
+
+            **Windows ARM64** — download `PHU-BEAT-SYNC-MULTI-SCOPE-windows-arm64-*.zip`, extract and copy
             `PHU BEAT SYNC MULTI SCOPE.vst3` to `C:\Program Files\Common Files\VST3\`.
 
             **Linux** — download `PHU-BEAT-SYNC-MULTI-SCOPE-linux-*.zip`, extract and copy
             `PHU BEAT SYNC MULTI SCOPE.vst3` to `~/.vst3/`.
+
+            Each zip contains the `.vst3` bundle and a `README.pdf` with full documentation.
+
+            ### Prerequisite (Windows)
+
+            Requires the [Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe).
 
             ### What's Changed
 
