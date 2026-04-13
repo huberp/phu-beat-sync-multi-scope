@@ -67,6 +67,7 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     juce::TextButton     colourSwatchButton;     // shows current colour; click to change
 
     // Display filter controls
+    juce::GroupComponent displayGroup;   // contains range selector
     juce::GroupComponent filtersGroup;
     DisplayFilterStrip hpFilterStrip;
     DisplayFilterStrip lpFilterStrip;

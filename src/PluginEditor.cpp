@@ -174,8 +174,12 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
     };
     addAndMakeVisible(colourSwatchButton);
 
-    // --- Display Filters Group ---
-    filtersGroup.setText("Display Filters");
+    // --- Display Group (range selector) ---
+    displayGroup.setText("Display");
+    addAndMakeVisible(displayGroup);
+
+    // --- Filters Group ---
+    filtersGroup.setText("Filters");
     addAndMakeVisible(filtersGroup);
 
     // Enforce HP < LP constraint when HP freq changes
@@ -325,16 +329,8 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     auto controlStrip = area.removeFromTop(56);
     controlStrip.reduce(10, 3);
 
-    // Display range (vertically centred in strip)
-    auto rangeArea = controlStrip.removeFromLeft(160);
-    int rangeY = rangeArea.getY() + (rangeArea.getHeight() - 24) / 2;
-    displayRangeLabel.setBounds(rangeArea.getX(), rangeY, 50, 24);
-    displayRangeCombo.setBounds(rangeArea.getX() + 55, rangeY, 100, 24);
-
-    controlStrip.removeFromLeft(20); // Spacing
-
-    // Remote controls group
-    auto remoteArea = controlStrip.removeFromLeft(360);
+    // Network group extends to the left edge (Range moved to Display group below)
+    auto remoteArea = controlStrip.removeFromLeft(540);
     remoteGroup.setBounds(remoteArea);
     auto remoteContent = remoteArea.reduced(10, 0);
     remoteContent.removeFromTop(16); // Space for group title
@@ -367,9 +363,21 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     identityContent.removeFromRight(4);
     channelLabelEditor.setBounds(identityContent);
 
-    // Display Filters strip (second control row)
+    // Filters strip (second control row) — left: "Display" group (range), right: "Filters" group (HP/LP)
     auto filtersStrip = area.removeFromTop(70);
     filtersStrip.reduce(10, 3);
+
+    constexpr int kDisplayGroupW = 180;
+    auto displayArea = filtersStrip.removeFromLeft(kDisplayGroupW);
+    displayGroup.setBounds(displayArea);
+    auto displayContent = displayArea.reduced(8, 0);
+    displayContent.removeFromTop(16);
+    displayContent.removeFromBottom(4);
+    int rangeY = displayContent.getY() + (displayContent.getHeight() - 24) / 2;
+    displayRangeLabel.setBounds(displayContent.getX(), rangeY, 50, 24);
+    displayRangeCombo.setBounds(displayContent.getX() + 55, rangeY, 100, 24);
+
+    filtersStrip.removeFromLeft(8); // Gap between groups
     filtersGroup.setBounds(filtersStrip);
     auto filtersContent = filtersStrip.reduced(10, 0);
     filtersContent.removeFromTop(16); // Space for group title
