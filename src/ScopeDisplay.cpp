@@ -280,6 +280,30 @@ void ScopeDisplay::clearRemoteInstances() {
     m_frameHasNewData    = true;
 }
 
+void ScopeDisplay::clearRemoteChannelsNotInMask(uint8_t enabledMask) {
+    bool anyCleared = false;
+    for (int i = 0; i < MAX_INSTANCES; ++i) {
+        if (m_instances[i].isLocal || !m_instances[i].active) continue;
+        // Slot index i corresponds to channel index i+1; bit i of enabledMask must be set.
+        // Guard against shifts beyond the mask width (mask is 8 bits, MAX_INSTANCES == 8).
+        if (i >= 8) continue;
+        const bool enabled = (enabledMask >> static_cast<unsigned>(i)) & 1u;
+        if (!enabled) {
+            m_instances[i].active     = false;
+            m_instances[i].instanceID = 0;
+            m_instances[i].hasSeq     = false;
+            m_instances[i].displayBins.assign(DISPLAY_BINS, 0.0f);
+            m_instances[i].rmsValues.clear();
+            anyCleared = true;
+        }
+    }
+    if (anyCleared) {
+        m_rmsOverlayDirty    = true;
+        m_cancelOverlayDirty = true;
+        m_frameHasNewData    = true;
+    }
+}
+
 void ScopeDisplay::setLocalInstanceIndex(int newIndex) {
     const int clamped = juce::jlimit(1, MAX_INSTANCES, newIndex);
     if (clamped == m_localInstanceIndex) return;

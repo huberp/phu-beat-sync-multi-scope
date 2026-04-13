@@ -62,15 +62,36 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
     };
     addAndMakeVisible(localDisplayToggle);
 
-    remoteDisplayToggle.setButtonText("Show Remote");
-    remoteDisplayToggle.setToggleState(true, juce::dontSendNotification);
-    remoteDisplayToggle.onClick = [this]() {
-        bool enabled = remoteDisplayToggle.getToggleState();
-        audioProcessor.setReceiveEnabled(enabled);
-        scopeDisplay.setRemoteDisplayEnabled(enabled);
-        scopeDisplay.repaint();
+    // Remote mode label + combo (replaces the old "Show Remote" toggle)
+    remoteModeLabel.setText("Remote:", juce::dontSendNotification);
+    remoteModeLabel.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(remoteModeLabel);
+
+    remoteModeCombo.addItem("All",       1);
+    remoteModeCombo.addItem("Selected\xe2\x80\xa6", 2);  // "Selected…"
+    remoteModeCombo.addItem("None",      3);
+    remoteModeCombo.setSelectedId(1, juce::dontSendNotification);
+    remoteModeCombo.setTooltip("Remote waveform mode: All = show all, Selected\xe2\x80\xa6 = show chosen channels only, None = hide remote waveforms");
+    remoteModeCombo.onChange = [this]() {
+        const int sel = remoteModeCombo.getSelectedId();
+        const RemoteMode newMode = (sel == 3) ? RemoteMode::None
+                                  : (sel == 2) ? RemoteMode::Selected
+                                              : RemoteMode::All;
+        m_remoteMode = newMode;
+        audioProcessor.setRemoteMode(static_cast<int>(newMode));
+        remoteChooseButton.setEnabled(newMode == RemoteMode::Selected);
+
+        if (newMode == RemoteMode::Selected)
+            openChannelChooser();
     };
-    addAndMakeVisible(remoteDisplayToggle);
+    addAndMakeVisible(remoteModeCombo);
+
+    remoteChooseButton.setEnabled(false);
+    remoteChooseButton.setTooltip("Choose which remote channels to display");
+    remoteChooseButton.onClick = [this]() {
+        openChannelChooser();
+    };
+    addAndMakeVisible(remoteChooseButton);
 
     broadcastToggle.setButtonText("Broadcast");
     broadcastToggle.setToggleState(audioProcessor.isBroadcastEnabled(),
@@ -153,8 +174,12 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
     };
     addAndMakeVisible(colourSwatchButton);
 
-    // --- Display Filters Group ---
-    filtersGroup.setText("Display Filters");
+    // --- Display Group (range selector) ---
+    displayGroup.setText("Display");
+    addAndMakeVisible(displayGroup);
+
+    // --- Filters Group ---
+    filtersGroup.setText("Filters");
     addAndMakeVisible(filtersGroup);
 
     // Enforce HP < LP constraint when HP freq changes
@@ -304,16 +329,8 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     auto controlStrip = area.removeFromTop(56);
     controlStrip.reduce(10, 3);
 
-    // Display range (vertically centred in strip)
-    auto rangeArea = controlStrip.removeFromLeft(160);
-    int rangeY = rangeArea.getY() + (rangeArea.getHeight() - 24) / 2;
-    displayRangeLabel.setBounds(rangeArea.getX(), rangeY, 50, 24);
-    displayRangeCombo.setBounds(rangeArea.getX() + 55, rangeY, 100, 24);
-
-    controlStrip.removeFromLeft(20); // Spacing
-
-    // Remote controls group
-    auto remoteArea = controlStrip.removeFromLeft(360);
+    // Network group extends to the left edge (Range moved to Display group below)
+    auto remoteArea = controlStrip.removeFromLeft(540);
     remoteGroup.setBounds(remoteArea);
     auto remoteContent = remoteArea.reduced(10, 0);
     remoteContent.removeFromTop(16); // Space for group title
@@ -321,7 +338,12 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     auto networkRow = remoteContent.removeFromTop(20);
     localDisplayToggle.setBounds(networkRow.removeFromLeft(92));
     networkRow.removeFromLeft(6);
-    remoteDisplayToggle.setBounds(networkRow.removeFromLeft(100));
+    // Remote mode: label + combo (+ choose button)
+    remoteModeLabel.setBounds(networkRow.removeFromLeft(52));
+    networkRow.removeFromLeft(2);
+    remoteModeCombo.setBounds(networkRow.removeFromLeft(90));
+    networkRow.removeFromLeft(4);
+    remoteChooseButton.setBounds(networkRow.removeFromLeft(64));
     networkRow.removeFromLeft(6);
     broadcastToggle.setBounds(networkRow.removeFromLeft(88));
 
@@ -341,9 +363,21 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     identityContent.removeFromRight(4);
     channelLabelEditor.setBounds(identityContent);
 
-    // Display Filters strip (second control row)
+    // Filters strip (second control row) — left: "Display" group (range), right: "Filters" group (HP/LP)
     auto filtersStrip = area.removeFromTop(70);
     filtersStrip.reduce(10, 3);
+
+    constexpr int kDisplayGroupW = 180;
+    auto displayArea = filtersStrip.removeFromLeft(kDisplayGroupW);
+    displayGroup.setBounds(displayArea);
+    auto displayContent = displayArea.reduced(8, 0);
+    displayContent.removeFromTop(16);
+    displayContent.removeFromBottom(4);
+    int rangeY = displayContent.getY() + (displayContent.getHeight() - 24) / 2;
+    displayRangeLabel.setBounds(displayContent.getX(), rangeY, 50, 24);
+    displayRangeCombo.setBounds(displayContent.getX() + 55, rangeY, 100, 24);
+
+    filtersStrip.removeFromLeft(8); // Gap between groups
     filtersGroup.setBounds(filtersStrip);
     auto filtersContent = filtersStrip.reduced(10, 0);
     filtersContent.removeFromTop(16); // Space for group title
@@ -396,8 +430,20 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::syncUIFromProcessorState() {
 
     broadcastToggle.setToggleState(audioProcessor.isBroadcastEnabled(),
                                    juce::dontSendNotification);
-    remoteDisplayToggle.setToggleState(audioProcessor.isReceiveEnabled(),
-                                       juce::dontSendNotification);
+
+    // Restore remote mode
+    const int savedMode = audioProcessor.getRemoteMode();
+    m_remoteMode = (savedMode == 2) ? RemoteMode::None
+                 : (savedMode == 1) ? RemoteMode::Selected
+                                    : RemoteMode::All;
+    m_lastRemoteMode = m_remoteMode;
+    remoteModeCombo.setSelectedId(savedMode + 1, juce::dontSendNotification);
+    remoteChooseButton.setEnabled(m_remoteMode == RemoteMode::Selected);
+
+    // Restore channel mask
+    m_remoteChannelMask     = audioProcessor.getRemoteChannelMask();
+    m_lastRemoteChannelMask = m_remoteChannelMask;
+
     broadcastOnlyToggle.setToggleState(broadcastOnlyMode,
                                        juce::dontSendNotification);
 
@@ -414,7 +460,8 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::syncUIFromProcessorState() {
 
     // Scope display
     scopeDisplay.setDisplayRangeBeats(audioProcessor.getDisplayRangeBeats());
-    scopeDisplay.setRemoteDisplayEnabled(audioProcessor.isReceiveEnabled());
+    // Remote display enabled when mode is not None
+    scopeDisplay.setRemoteDisplayEnabled(m_remoteMode != RemoteMode::None);
     scopeDisplay.setLocalColour(colour);
 
     applyBroadcastOnlyUiState(broadcastOnlyMode);
@@ -515,17 +562,55 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
     }
 
     // --- Consume remote packets (network receive on UI thread, per requirement) ---
-    const bool remoteEnabled = remoteDisplayToggle.getToggleState();
-    if (remoteEnabled) {
+    // Mode-based logic: All / Selected / None
+    if (m_remoteMode == RemoteMode::None) {
+        audioProcessor.setReceiveEnabled(false);
+        scopeDisplay.setRemoteDisplayEnabled(false);
+        if (m_lastRemoteMode != RemoteMode::None)
+            scopeDisplay.clearRemoteInstances();
+    } else if (m_remoteMode == RemoteMode::All) {
+        audioProcessor.setReceiveEnabled(true);
+        scopeDisplay.setRemoteDisplayEnabled(true);
         audioProcessor.getCtrlBroadcaster().getRemoteInfos(m_remoteInfosCache);
         audioProcessor.getSampleBroadcaster().getReceivedPackets(m_remoteDataCache);
         scopeDisplay.writeRemotePackets(m_remoteDataCache, m_remoteInfosCache);
-    } else if (m_lastRemoteEnabled) {
-        // Remote display just turned off — clear instance slots once instead of
-        // zeroing 114 KB of buffers unconditionally at 60 Hz.
-        scopeDisplay.clearRemoteInstances();
+    } else { // RemoteMode::Selected
+        audioProcessor.setReceiveEnabled(true);
+        scopeDisplay.setRemoteDisplayEnabled(true);
+
+        // When entering Selected mode (or mask changed), purge non-selected channels
+        if (m_lastRemoteMode != RemoteMode::Selected ||
+            m_remoteChannelMask != m_lastRemoteChannelMask) {
+            scopeDisplay.clearRemoteChannelsNotInMask(m_remoteChannelMask);
+            m_lastRemoteChannelMask = m_remoteChannelMask;
+        }
+
+        // Fetch and filter infos + packets by channel mask before ingestion
+        audioProcessor.getCtrlBroadcaster().getRemoteInfos(m_remoteInfosCache);
+        audioProcessor.getSampleBroadcaster().getReceivedPackets(m_remoteDataCache);
+
+        // Helper: returns true when instanceIndex (1-based) maps to an enabled mask bit
+        const auto isChannelEnabled = [this](int instanceIndex) -> bool {
+            const int ch = instanceIndex - 1;
+            return ch >= 0 && ch < 8 && (((m_remoteChannelMask) >> static_cast<unsigned>(ch)) & 1u);
+        };
+
+        // Filter: keep only entries whose instanceIndex is enabled in the mask
+        std::vector<SampleBroadcaster::RemoteRawPacket> filteredPackets;
+        filteredPackets.reserve(m_remoteDataCache.size());
+        for (const auto& pkt : m_remoteDataCache)
+            if (isChannelEnabled(static_cast<int>(pkt.instanceIndex)))
+                filteredPackets.push_back(pkt);
+
+        std::vector<phu::network::RemoteInstanceInfo> filteredInfos;
+        filteredInfos.reserve(m_remoteInfosCache.size());
+        for (const auto& info : m_remoteInfosCache)
+            if (isChannelEnabled(static_cast<int>(info.instanceIndex)))
+                filteredInfos.push_back(info);
+
+        scopeDisplay.writeRemotePackets(filteredPackets, filteredInfos);
     }
-    m_lastRemoteEnabled = remoteEnabled;
+    m_lastRemoteMode = m_remoteMode;
 
     // --- Compute frame and repaint only when new data arrived ---
     // Skipping computeFrame() + repaint() when the DAW is stopped (and no remote
@@ -541,7 +626,8 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::applyBroadcastOnlyUiState(bool e
     broadcastOnlyToggle.setToggleState(enabled, juce::dontSendNotification);
     displayRangeCombo.setEnabled(!enabled);
     localDisplayToggle.setEnabled(!enabled);
-    remoteDisplayToggle.setEnabled(!enabled);
+    remoteModeCombo.setEnabled(!enabled);
+    remoteChooseButton.setEnabled(!enabled && m_remoteMode == RemoteMode::Selected);
     hpFilterStrip.setEnabled(!enabled);
     lpFilterStrip.setEnabled(!enabled);
     rmsToggle.setEnabled(!enabled);
@@ -553,12 +639,12 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::applyBroadcastOnlyUiState(bool e
         scopeDisplay.setRemoteDisplayEnabled(false);
         scopeDisplay.setBroadcastOnlyOverlayEnabled(true);
         scopeDisplay.clearRemoteInstances();
-        m_lastRemoteEnabled = false;
+        m_lastRemoteMode = RemoteMode::None; // force re-evaluation when leaving broadcast-only
     } else {
         scopeDisplay.setLocalDisplayEnabled(localDisplayToggle.getToggleState());
-        scopeDisplay.setRemoteDisplayEnabled(remoteDisplayToggle.getToggleState());
+        scopeDisplay.setRemoteDisplayEnabled(m_remoteMode != RemoteMode::None);
         scopeDisplay.setBroadcastOnlyOverlayEnabled(false);
-        m_lastRemoteEnabled = remoteDisplayToggle.getToggleState();
+        m_lastRemoteMode = m_remoteMode;
     }
 
     scopeDisplay.repaint();
@@ -650,4 +736,35 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::parameterChanged(
             }
         }
     });
+}
+
+// ============================================================================
+// Channel chooser popup
+// ============================================================================
+
+void PhuBeatSyncMultiScopeAudioProcessorEditor::openChannelChooser()
+{
+    auto* chooser = new RemoteChannelChooserComponent(m_remoteChannelMask);
+
+    // Provide current remote identity info so the chooser shows labels/colours
+    chooser->updateRemoteInfos(m_remoteInfosCache);
+
+    // Use a SafePointer so the callback is harmless if the editor is deleted first
+    juce::Component::SafePointer<PhuBeatSyncMultiScopeAudioProcessorEditor> safeThis(this);
+    chooser->onMaskChanged = [safeThis](uint8_t newMask) {
+        if (safeThis == nullptr) return;
+        safeThis->m_remoteChannelMask = newMask;
+        safeThis->audioProcessor.setRemoteChannelMask(newMask);
+        // Purge channels that are now deselected
+        safeThis->scopeDisplay.clearRemoteChannelsNotInMask(newMask);
+        safeThis->m_lastRemoteChannelMask = newMask;
+    };
+
+    chooser->setSize(RemoteChannelChooserComponent::PREFERRED_W,
+                     RemoteChannelChooserComponent::PREFERRED_H);
+
+    juce::CallOutBox::launchAsynchronously(
+        std::unique_ptr<juce::Component>(chooser),
+        remoteChooseButton.getScreenBounds(),
+        nullptr);
 }

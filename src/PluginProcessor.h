@@ -95,6 +95,12 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     bool isReceiveEnabled() const { return m_receiveEnabled.load(); }
     void setReceiveEnabled(bool enabled);
 
+    // Remote mode and per-channel mask (UI state persisted with session)
+    int     getRemoteMode()        const { return m_remoteMode.load(); }
+    void    setRemoteMode(int mode)      { m_remoteMode.store(mode); }
+    uint8_t getRemoteChannelMask() const { return m_remoteChannelMask.load(); }
+    void    setRemoteChannelMask(uint8_t mask) { m_remoteChannelMask.store(mask); }
+
     // ---- Processor timer -------------------------------------------------------
     /** Timer frequency (Hz) for the processor-owned heartbeat / index-sync timer. */
     static constexpr int PROCESSOR_TIMER_HZ = 30;
@@ -159,6 +165,10 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     std::atomic<bool> m_receiveEnabled{true};
     std::atomic<bool> m_broadcastOnlyMode{false};
     std::atomic<bool> m_receiveEnabledWhenActive{true};
+
+    // Remote mode (0=All, 1=Selected, 2=None) and per-channel mask
+    std::atomic<int>     m_remoteMode        { 0 };
+    std::atomic<uint8_t> m_remoteChannelMask { 0xFF };
 
     // Control broadcaster (instance identity)
     CtrlBroadcaster m_ctrlBroadcaster;
