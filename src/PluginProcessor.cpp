@@ -506,6 +506,8 @@ static const juce::Identifier kPropColourG       { "colourG" };
 static const juce::Identifier kPropColourB       { "colourB" };
 static const juce::Identifier kPropColourA       { "colourA" };
 static const juce::Identifier kPropBroadcastOnly { "broadcastOnlyMode" };
+static const juce::Identifier kPropRemoteMode    { "remoteMode" };
+static const juce::Identifier kPropRemoteMask    { "remoteChannelMask" };
 
 void PhuBeatSyncMultiScopeAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
     auto state = apvts.copyState();
@@ -524,6 +526,8 @@ void PhuBeatSyncMultiScopeAudioProcessor::getStateInformation(juce::MemoryBlock&
     pluginState.setProperty(kPropColourB,      static_cast<int>(m_colourRGBA[2]), nullptr);
     pluginState.setProperty(kPropColourA,      static_cast<int>(m_colourRGBA[3]), nullptr);
     pluginState.setProperty(kPropBroadcastOnly, m_broadcastOnlyMode.load(), nullptr);
+    pluginState.setProperty(kPropRemoteMode,   m_remoteMode.load(),              nullptr);
+    pluginState.setProperty(kPropRemoteMask,   static_cast<int>(m_remoteChannelMask.load()), nullptr);
     state.addChild(pluginState, -1, nullptr);
 
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
@@ -568,6 +572,10 @@ void PhuBeatSyncMultiScopeAudioProcessor::setStateInformation(const void* data, 
                 m_colourRGBA[3] = static_cast<uint8_t>(static_cast<int>(src.getProperty(kPropColourA)));
             if (src.hasProperty(kPropBroadcastOnly))
                 setBroadcastOnlyMode(static_cast<bool>(src.getProperty(kPropBroadcastOnly)));
+            if (src.hasProperty(kPropRemoteMode))
+                m_remoteMode.store(static_cast<int>(src.getProperty(kPropRemoteMode)));
+            if (src.hasProperty(kPropRemoteMask))
+                m_remoteChannelMask.store(static_cast<uint8_t>(static_cast<int>(src.getProperty(kPropRemoteMask))));
         }
     }
 }

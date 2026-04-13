@@ -122,6 +122,13 @@ class ScopeDisplay : public juce::Component {
     void clearRemoteInstances();
 
     /**
+     * Deactivate remote instance slots whose channel index is NOT set in enabledMask.
+     * Bit N (0-based) of enabledMask corresponds to channel index N+1.
+     * Call whenever the per-channel selection mask changes in Selected mode.
+     */
+    void clearRemoteChannelsNotInMask(uint8_t enabledMask);
+
+    /**
      * Update the local instance's display slot index.
      * @param newIndex  User-assigned channel index [1, 8].
      */

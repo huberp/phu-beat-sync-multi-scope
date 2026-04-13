@@ -18,6 +18,8 @@ target_sources(phu-beat-sync-multi-scope PRIVATE
     ScopeDisplay.h
     DisplayFilterStrip.cpp
     DisplayFilterStrip.h
+    RemoteChannelChooser.cpp
+    RemoteChannelChooser.h
     $<$<CONFIG:Debug>:DebugLogPanel.cpp>
     $<$<CONFIG:Debug>:DebugLogPanel.h>
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DisplayFilterStrip.h"
+#include "RemoteChannelChooser.h"
 #include "ScopeDisplay.h"
 #include "DebugLogPanel.h"
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -46,8 +47,14 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
 
     // Remote waveform controls (following phu-splitter pattern)
     juce::GroupComponent remoteGroup;
-    juce::ToggleButton localDisplayToggle;    // Show/hide local waveform
-    juce::ToggleButton remoteDisplayToggle;  // Show/hide remote waveforms
+    juce::ToggleButton localDisplayToggle;   // Show/hide local waveform
+
+    // Remote mode controls (replaces the old "Show Remote" toggle)
+    enum class RemoteMode { All = 0, Selected = 1, None = 2 };
+    juce::Label     remoteModeLabel;
+    juce::ComboBox  remoteModeCombo;
+    juce::TextButton remoteChooseButton { "Choose\xe2\x80\xa6" }; // "Choose…"
+
     juce::ToggleButton broadcastToggle;       // Enable/disable broadcasting
     juce::TextButton broadcastOnlyToggle;     // Active vs Broadcast-only mode
     juce::TextButton peersBroadcastOnlyButton; // Sends command to peers to enter broadcast-only mode
@@ -89,9 +96,11 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     // Track last BPM-derived max display range to avoid redundant combo-box updates
     double m_lastMaxDisplayBeats = 8.0;
 
-    // Track remote-display toggle state to call clearRemoteInstances() only on
-    // the enabled→disabled transition, not unconditionally every 60-Hz tick.
-    bool m_lastRemoteEnabled = true;
+    // Track remote-display mode state to detect transitions between frames.
+    RemoteMode m_remoteMode         = RemoteMode::All;
+    RemoteMode m_lastRemoteMode     = RemoteMode::All;
+    uint8_t    m_remoteChannelMask  = 0xFF; // all channels enabled by default
+    uint8_t    m_lastRemoteChannelMask = 0xFF;
 
     // Track local instance index so we only call setLocalInstanceIndex() when it changes
     int m_lastLocalInstanceIndex = -1;
@@ -114,6 +123,7 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     bool m_needsStateSync = true;
     void syncUIFromProcessorState();
     void applyBroadcastOnlyUiState(bool enabled);
+    void openChannelChooser();
 
 #if PHU_DEBUG_UI
     // Reusable debug log panel with decoupled low-rate UI timer
