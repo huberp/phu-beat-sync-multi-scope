@@ -285,8 +285,10 @@ void ScopeDisplay::clearRemoteChannelsNotInMask(uint8_t enabledMask) {
     for (int i = 0; i < MAX_INSTANCES; ++i) {
         if (m_instances[i].isLocal || !m_instances[i].active) continue;
         // Slot index i corresponds to channel index i+1; bit i of enabledMask must be set.
-        const uint8_t bit = static_cast<uint8_t>(1u << i);
-        if (!(enabledMask & bit)) {
+        // Guard against shifts beyond the mask width (mask is 8 bits, MAX_INSTANCES == 8).
+        if (i >= 8) continue;
+        const bool enabled = (enabledMask >> static_cast<unsigned>(i)) & 1u;
+        if (!enabled) {
             m_instances[i].active     = false;
             m_instances[i].instanceID = 0;
             m_instances[i].hasSeq     = false;

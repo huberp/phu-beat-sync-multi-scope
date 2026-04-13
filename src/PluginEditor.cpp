@@ -581,22 +581,24 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
         audioProcessor.getCtrlBroadcaster().getRemoteInfos(m_remoteInfosCache);
         audioProcessor.getSampleBroadcaster().getReceivedPackets(m_remoteDataCache);
 
+        // Helper: returns true when instanceIndex (1-based) maps to an enabled mask bit
+        const auto isChannelEnabled = [this](int instanceIndex) -> bool {
+            const int ch = instanceIndex - 1;
+            return ch >= 0 && ch < 8 && (((m_remoteChannelMask) >> static_cast<unsigned>(ch)) & 1u);
+        };
+
         // Filter: keep only entries whose instanceIndex is enabled in the mask
         std::vector<SampleBroadcaster::RemoteRawPacket> filteredPackets;
         filteredPackets.reserve(m_remoteDataCache.size());
-        for (const auto& pkt : m_remoteDataCache) {
-            const int ch = static_cast<int>(pkt.instanceIndex) - 1;
-            if (ch >= 0 && ch < 8 && ((m_remoteChannelMask >> ch) & 1))
+        for (const auto& pkt : m_remoteDataCache)
+            if (isChannelEnabled(static_cast<int>(pkt.instanceIndex)))
                 filteredPackets.push_back(pkt);
-        }
 
         std::vector<phu::network::RemoteInstanceInfo> filteredInfos;
         filteredInfos.reserve(m_remoteInfosCache.size());
-        for (const auto& info : m_remoteInfosCache) {
-            const int ch = static_cast<int>(info.instanceIndex) - 1;
-            if (ch >= 0 && ch < 8 && ((m_remoteChannelMask >> ch) & 1))
+        for (const auto& info : m_remoteInfosCache)
+            if (isChannelEnabled(static_cast<int>(info.instanceIndex)))
                 filteredInfos.push_back(info);
-        }
 
         scopeDisplay.writeRemotePackets(filteredPackets, filteredInfos);
     }
