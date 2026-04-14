@@ -289,8 +289,12 @@ jobs:
       - name: Generate README.pdf
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y pandoc texlive-latex-base texlive-fonts-recommended texlive-latex-recommended librsvg2-bin
-          pandoc README.md -o README.pdf --pdf-engine=pdflatex -V geometry:margin=1in
+          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended librsvg2-bin
+          pandoc README.md -o README.pdf \
+            --pdf-engine=xelatex \
+            -V geometry:margin=1in \
+            -V "mainfont:DejaVu Sans" \
+            -V "monofont:DejaVu Sans Mono"
 
       - name: Inject README.pdf into all release zips
         run: |
