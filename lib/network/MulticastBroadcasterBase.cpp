@@ -4,11 +4,15 @@
 #include <cstring>
 #include <random>
 
-namespace phu {
-namespace network {
-
-// Include socket headers only in implementation file
+// Include socket headers before any namespace declarations to ensure all
+// Windows SDK symbols are emitted into the global namespace, not into
+// phu::network. Placing #include directives inside a namespace block causes
+// every declaration in the included headers to land in that namespace, which
+// breaks Windows intrinsics such as _InterlockedIncrement.
 #ifdef _WIN32
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
     #ifndef NOMINMAX
         #define NOMINMAX
     #endif
@@ -26,6 +30,9 @@ namespace network {
     #define MCAST_SOCKET_ERROR   (-1)
     #define closesocket close
 #endif
+
+namespace phu {
+namespace network {
 
 #ifdef _WIN32
 bool       MulticastBroadcasterBase::wsaInitialized = false;
