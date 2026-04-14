@@ -58,7 +58,8 @@ A VST3 oscilloscope that loads on multiple DAW tracks simultaneously. All instan
 
 **Windows:** Requires the [Microsoft Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe). Already present if Visual Studio 2019 or 2022 is installed.  
 **Linux:** No external dependencies — the binary is self-contained.  
-**macOS:** Universal binary — runs natively on both Intel (x86_64) and Apple Silicon (arm64).
+**macOS Intel:** Download the `macos-intel-x86_64` release for Mac computers with an Intel processor.  
+**macOS Apple Silicon:** Download the `macos-apple-silicon-arm64` release for Mac computers with an M-series chip.
 
 ### Setup
 
@@ -134,18 +135,27 @@ cmake --build --preset vs2026-build --config Release
 
 Output: `build/vs2026-x64/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/`
 
-### macOS (Universal — Intel + Apple Silicon)
+### macOS Intel (x86_64)
 
 ```bash
-cmake --preset macos-release
-cmake --build --preset macos-build
+cmake --preset macos-x86_64-release
+cmake --build --preset macos-x86_64-build
 ```
 
 Output:
-- `build/macos-release/src/phu-beat-sync-multi-scope_artefacts/Release/AU/` (AU)
-- `build/macos-release/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/` (VST3)
+- `build/macos-x86_64-release/src/phu-beat-sync-multi-scope_artefacts/Release/AU/` (AU)
+- `build/macos-x86_64-release/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/` (VST3)
 
-Both bundles are universal binaries containing arm64 and x86_64 slices.
+### macOS Apple Silicon (arm64)
+
+```bash
+cmake --preset macos-arm64-release
+cmake --build --preset macos-arm64-build
+```
+
+Output:
+- `build/macos-arm64-release/src/phu-beat-sync-multi-scope_artefacts/Release/AU/` (AU)
+- `build/macos-arm64-release/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/` (VST3)
 
 ### Linux
 
