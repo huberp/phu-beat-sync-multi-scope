@@ -157,7 +157,7 @@ jobs:
       run: cmake --build --preset linux-build
 
   build-macos-intel:
-    runs-on: macos-13
+    runs-on: macos-latest
     permissions:
       contents: read
     steps:
