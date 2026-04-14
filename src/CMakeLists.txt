@@ -24,12 +24,12 @@ target_sources(phu-beat-sync-multi-scope PRIVATE
     ScopeDisplay.h
     DisplayFilterStrip.cpp
     DisplayFilterStrip.h
-    $<$<CONFIG:Debug>:DebugLogPanel.cpp>
-    $<$<CONFIG:Debug>:DebugLogPanel.h>
+    DebugLogPanel.cpp
+    DebugLogPanel.h
 
     # Debug components (moved to lib/debug/)
-    $<$<CONFIG:Debug>:../lib/debug/EditorLogger.cpp>
-    $<$<CONFIG:Debug>:../lib/debug/EditorLogger.h>
+    ../lib/debug/EditorLogger.cpp
+    ../lib/debug/EditorLogger.h
 
     # Network components with .cpp implementations
     ../lib/network/MulticastBroadcasterBase.cpp
