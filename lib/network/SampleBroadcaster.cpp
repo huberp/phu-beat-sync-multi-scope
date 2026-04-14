@@ -7,11 +7,7 @@
     #include <cstdio>
 #endif
 
-// Include socket headers before any namespace declarations to ensure all
-// Windows SDK symbols are emitted into the global namespace, not into
-// phu::network. Placing #include directives inside a namespace block causes
-// every declaration in the included headers to land in that namespace, which
-// breaks Windows intrinsics such as _InterlockedIncrement.
+// Socket headers must be included before any namespace block.
 #ifdef _WIN32
     #ifndef WIN32_LEAN_AND_MEAN
         #define WIN32_LEAN_AND_MEAN
