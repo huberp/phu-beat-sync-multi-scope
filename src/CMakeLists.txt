@@ -1,7 +1,13 @@
+if(APPLE)
+    set(PHU_PLUGIN_FORMATS VST3 AU)
+else()
+    set(PHU_PLUGIN_FORMATS VST3)
+endif()
+
 juce_add_plugin(phu-beat-sync-multi-scope
     PLUGIN_MANUFACTURER_CODE Phub
     PLUGIN_CODE Pbsm
-    FORMATS VST3
+    FORMATS ${PHU_PLUGIN_FORMATS}
     PRODUCT_NAME "PHU BEAT SYNC MULTI SCOPE"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
@@ -18,12 +24,12 @@ target_sources(phu-beat-sync-multi-scope PRIVATE
     ScopeDisplay.h
     DisplayFilterStrip.cpp
     DisplayFilterStrip.h
-    $<$<CONFIG:Debug>:DebugLogPanel.cpp>
-    $<$<CONFIG:Debug>:DebugLogPanel.h>
+    DebugLogPanel.cpp
+    DebugLogPanel.h
 
     # Debug components (moved to lib/debug/)
-    $<$<CONFIG:Debug>:../lib/debug/EditorLogger.cpp>
-    $<$<CONFIG:Debug>:../lib/debug/EditorLogger.h>
+    ../lib/debug/EditorLogger.cpp
+    ../lib/debug/EditorLogger.h
 
     # Network components with .cpp implementations
     ../lib/network/MulticastBroadcasterBase.cpp

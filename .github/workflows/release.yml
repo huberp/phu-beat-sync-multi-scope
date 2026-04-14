@@ -152,11 +152,105 @@ jobs:
           path: dist/*.zip
 
   # ---------------------------------------------------------------------------
+  # Build & package macOS Intel (x86_64) AU + VST3
+  # ---------------------------------------------------------------------------
+  release-macos-intel:
+    name: macOS Intel AU + VST3 (x86_64)
+    runs-on: macos-13
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure CMake (x86_64)
+        run: cmake --preset macos-x86_64-release
+
+      - name: Build Release
+        run: cmake --build --preset macos-x86_64-build
+
+      - name: Package AU and VST3
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          ZIP_NAME="PHU-BEAT-SYNC-MULTI-SCOPE-macos-intel-x86_64-${VERSION}.zip"
+          mkdir -p dist staging
+
+          BASE="build/macos-x86_64-release/src/phu-beat-sync-multi-scope_artefacts/Release"
+
+          AU_PATH=$(find "$BASE/AU" -name "*.component" -maxdepth 2 | head -n 1)
+          VST3_PATH=$(find "$BASE/VST3" -name "*.vst3" -maxdepth 2 | head -n 1)
+
+          if [ -z "$AU_PATH" ] && [ -z "$VST3_PATH" ]; then
+            echo "ERROR: No plugin bundles found under $BASE"
+            exit 1
+          fi
+
+          [ -n "$AU_PATH"  ] && cp -R "$AU_PATH"  staging/ && echo "Packaged AU:   $AU_PATH"
+          [ -n "$VST3_PATH" ] && cp -R "$VST3_PATH" staging/ && echo "Packaged VST3: $VST3_PATH"
+
+          (cd staging && zip -r "../dist/$ZIP_NAME" .)
+          echo "Created dist/$ZIP_NAME"
+
+      - name: Upload macOS Intel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-intel-au-vst3
+          path: dist/*.zip
+
+  # ---------------------------------------------------------------------------
+  # Build & package macOS Apple Silicon (arm64) AU + VST3
+  # ---------------------------------------------------------------------------
+  release-macos-arm64:
+    name: macOS Apple Silicon AU + VST3 (arm64)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure CMake (arm64)
+        run: cmake --preset macos-arm64-release
+
+      - name: Build Release
+        run: cmake --build --preset macos-arm64-build
+
+      - name: Package AU and VST3
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          ZIP_NAME="PHU-BEAT-SYNC-MULTI-SCOPE-macos-apple-silicon-arm64-${VERSION}.zip"
+          mkdir -p dist staging
+
+          BASE="build/macos-arm64-release/src/phu-beat-sync-multi-scope_artefacts/Release"
+
+          AU_PATH=$(find "$BASE/AU" -name "*.component" -maxdepth 2 | head -n 1)
+          VST3_PATH=$(find "$BASE/VST3" -name "*.vst3" -maxdepth 2 | head -n 1)
+
+          if [ -z "$AU_PATH" ] && [ -z "$VST3_PATH" ]; then
+            echo "ERROR: No plugin bundles found under $BASE"
+            exit 1
+          fi
+
+          [ -n "$AU_PATH"  ] && cp -R "$AU_PATH"  staging/ && echo "Packaged AU:   $AU_PATH"
+          [ -n "$VST3_PATH" ] && cp -R "$VST3_PATH" staging/ && echo "Packaged VST3: $VST3_PATH"
+
+          (cd staging && zip -r "../dist/$ZIP_NAME" .)
+          echo "Created dist/$ZIP_NAME"
+
+      - name: Upload macOS Apple Silicon artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-au-vst3
+          path: dist/*.zip
+
+  # ---------------------------------------------------------------------------
   # Generate README.pdf, inject into all zips, publish GitHub Release
   # ---------------------------------------------------------------------------
   publish-release:
     name: Publish GitHub Release
-    needs: [release-windows-x64, release-windows-arm64, release-linux]
+    needs: [release-windows-x64, release-windows-arm64, release-linux, release-macos-intel, release-macos-arm64]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -178,6 +272,18 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: linux-vst3
+          path: dist/
+
+      - name: Download macOS Intel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-intel-au-vst3
+          path: dist/
+
+      - name: Download macOS Apple Silicon artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-arm64-au-vst3
           path: dist/
 
       - name: Generate README.pdf
@@ -213,10 +319,20 @@ jobs:
             **Windows ARM64** — download `PHU-BEAT-SYNC-MULTI-SCOPE-windows-arm64-*.zip`, extract and copy
             `PHU BEAT SYNC MULTI SCOPE.vst3` to `C:\Program Files\Common Files\VST3\`.
 
+            **macOS Intel (x86_64)** — download `PHU-BEAT-SYNC-MULTI-SCOPE-macos-intel-x86_64-*.zip`,
+            extract and copy:
+            - `PHU BEAT SYNC MULTI SCOPE.component` to `~/Library/Audio/Plug-Ins/Components/` (AU)
+            - `PHU BEAT SYNC MULTI SCOPE.vst3` to `~/Library/Audio/Plug-Ins/VST3/` (VST3)
+
+            **macOS Apple Silicon (arm64)** — download `PHU-BEAT-SYNC-MULTI-SCOPE-macos-apple-silicon-arm64-*.zip`,
+            extract and copy:
+            - `PHU BEAT SYNC MULTI SCOPE.component` to `~/Library/Audio/Plug-Ins/Components/` (AU)
+            - `PHU BEAT SYNC MULTI SCOPE.vst3` to `~/Library/Audio/Plug-Ins/VST3/` (VST3)
+
             **Linux** — download `PHU-BEAT-SYNC-MULTI-SCOPE-linux-*.zip`, extract and copy
             `PHU BEAT SYNC MULTI SCOPE.vst3` to `~/.vst3/`.
 
-            Each zip contains the `.vst3` bundle and a `README.pdf` with full documentation.
+            Each zip contains the plugin bundle(s) and a `README.pdf` with full documentation.
 
             ### Prerequisite (Windows)
 
