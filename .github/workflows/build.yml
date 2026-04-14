@@ -155,3 +155,17 @@ jobs:
       run: cmake --preset linux-release
     - name: Build
       run: cmake --build --preset linux-build
+
+  build-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure CMake (Universal)
+        run: cmake --preset macos-release
+      - name: Build (arm64 + x86_64)
+        run: cmake --build --preset macos-build

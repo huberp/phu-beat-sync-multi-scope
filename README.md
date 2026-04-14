@@ -3,8 +3,8 @@
 [![Build](https://github.com/huberp/phu-beat-sync-multi-scope/actions/workflows/build.yml/badge.svg)](https://github.com/huberp/phu-beat-sync-multi-scope/actions/workflows/build.yml)
 [![Release](https://github.com/huberp/phu-beat-sync-multi-scope/actions/workflows/release.yml/badge.svg)](https://github.com/huberp/phu-beat-sync-multi-scope/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blue.svg)](#building)
-[![Format](https://img.shields.io/badge/format-VST3-purple.svg)](#building)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue.svg)](#building)
+[![Format](https://img.shields.io/badge/format-VST3%20%7C%20AU-purple.svg)](#building)
 [![JUCE](https://img.shields.io/badge/JUCE-8.0.12-orange.svg)](https://juce.com)
 [![Coffee](https://img.shields.io/badge/By%20me%20a%20Coffee-purple.svg)](https://ko-fi.com/phuplugins)
 
@@ -48,14 +48,17 @@ A VST3 oscilloscope that loads on multiple DAW tracks simultaneously. All instan
 ### Installation
 
 1. Download the latest release from [Releases](https://github.com/huberp/phu-beat-sync-multi-scope/releases)
-2. Copy the `.vst3` bundle to your DAW's VST3 folder:
-   - Windows: `C:\Program Files\Common Files\VST3\`
-   - Linux: `~/.vst3/` or `/usr/lib/vst3/`
+2. Copy the plugin bundle to your DAW's plugin folder:
+   - Windows: `C:\Program Files\Common Files\VST3\` (`.vst3`)
+   - Linux: `~/.vst3/` or `/usr/lib/vst3/` (`.vst3`)
+   - macOS AU: `~/Library/Audio/Plug-Ins/Components/` (`.component`)
+   - macOS VST3: `~/Library/Audio/Plug-Ins/VST3/` (`.vst3`)
 3. Rescan plugins in your DAW
 4. Load **PHU BEAT SYNC MULTI SCOPE** on any tracks you want to compare
 
 **Windows:** Requires the [Microsoft Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe). Already present if Visual Studio 2019 or 2022 is installed.  
-**Linux:** No external dependencies — the binary is self-contained.
+**Linux:** No external dependencies — the binary is self-contained.  
+**macOS:** Universal binary — runs natively on both Intel (x86_64) and Apple Silicon (arm64).
 
 ### Setup
 
@@ -130,6 +133,19 @@ cmake --build --preset vs2026-build --config Release
 ```
 
 Output: `build/vs2026-x64/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/`
+
+### macOS (Universal — Intel + Apple Silicon)
+
+```bash
+cmake --preset macos-release
+cmake --build --preset macos-build
+```
+
+Output:
+- `build/macos-release/src/phu-beat-sync-multi-scope_artefacts/Release/AU/` (AU)
+- `build/macos-release/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/` (VST3)
+
+Both bundles are universal binaries containing arm64 and x86_64 slices.
 
 ### Linux
 

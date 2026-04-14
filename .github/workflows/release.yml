@@ -152,11 +152,69 @@ jobs:
           path: dist/*.zip
 
   # ---------------------------------------------------------------------------
+  # Build & package macOS Universal AU + VST3 (arm64 + x86_64 on single runner)
+  # ---------------------------------------------------------------------------
+  release-macos-universal:
+    name: macOS Universal AU + VST3
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure CMake (Universal arm64 + x86_64)
+        run: cmake --preset macos-release
+
+      - name: Build Release
+        run: cmake --build --preset macos-build
+
+      - name: Package AU and VST3
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          ZIP_NAME="PHU-BEAT-SYNC-MULTI-SCOPE-macos-universal-${VERSION}.zip"
+          mkdir -p dist staging
+
+          BASE="build/macos-release/src/phu-beat-sync-multi-scope_artefacts/Release"
+
+          AU_PATH=$(find "$BASE/AU" -name "*.component" -maxdepth 2 | head -n 1)
+          VST3_PATH=$(find "$BASE/VST3" -name "*.vst3" -maxdepth 2 | head -n 1)
+
+          if [ -z "$AU_PATH" ] && [ -z "$VST3_PATH" ]; then
+            echo "ERROR: No plugin bundles found under $BASE"
+            exit 1
+          fi
+
+          [ -n "$AU_PATH"  ] && cp -R "$AU_PATH"  staging/ && echo "Packaged AU:   $AU_PATH"
+          [ -n "$VST3_PATH" ] && cp -R "$VST3_PATH" staging/ && echo "Packaged VST3: $VST3_PATH"
+
+          (cd staging && zip -r "../dist/$ZIP_NAME" .)
+          echo "Created dist/$ZIP_NAME"
+
+      - name: Verify universal binary architectures
+        run: |
+          BASE="build/macos-release/src/phu-beat-sync-multi-scope_artefacts/Release"
+          for bundle in $(find "$BASE" -name "*.component" -o -name "*.vst3" | head -n 4); do
+            bin=$(find "$bundle" -type f -perm -0111 | head -n 1)
+            if [ -n "$bin" ]; then
+              echo "=== lipo -info $bin ==="
+              lipo -info "$bin"
+            fi
+          done
+
+      - name: Upload macOS Universal artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal-au-vst3
+          path: dist/*.zip
+
+  # ---------------------------------------------------------------------------
   # Generate README.pdf, inject into all zips, publish GitHub Release
   # ---------------------------------------------------------------------------
   publish-release:
     name: Publish GitHub Release
-    needs: [release-windows-x64, release-windows-arm64, release-linux]
+    needs: [release-windows-x64, release-windows-arm64, release-linux, release-macos-universal]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -178,6 +236,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: linux-vst3
+          path: dist/
+
+      - name: Download macOS Universal artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-universal-au-vst3
           path: dist/
 
       - name: Generate README.pdf
@@ -213,10 +277,15 @@ jobs:
             **Windows ARM64** — download `PHU-BEAT-SYNC-MULTI-SCOPE-windows-arm64-*.zip`, extract and copy
             `PHU BEAT SYNC MULTI SCOPE.vst3` to `C:\Program Files\Common Files\VST3\`.
 
+            **macOS Universal (Intel + Apple Silicon)** — download `PHU-BEAT-SYNC-MULTI-SCOPE-macos-universal-*.zip`,
+            extract and copy:
+            - `PHU BEAT SYNC MULTI SCOPE.component` to `~/Library/Audio/Plug-Ins/Components/` (AU)
+            - `PHU BEAT SYNC MULTI SCOPE.vst3` to `~/Library/Audio/Plug-Ins/VST3/` (VST3)
+
             **Linux** — download `PHU-BEAT-SYNC-MULTI-SCOPE-linux-*.zip`, extract and copy
             `PHU BEAT SYNC MULTI SCOPE.vst3` to `~/.vst3/`.
 
-            Each zip contains the `.vst3` bundle and a `README.pdf` with full documentation.
+            Each zip contains the plugin bundle(s) and a `README.pdf` with full documentation.
 
             ### Prerequisite (Windows)
 

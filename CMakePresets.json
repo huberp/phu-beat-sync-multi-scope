@@ -29,6 +29,18 @@
         "CMAKE_CXX_STANDARD": "17",
         "CMAKE_CXX_STANDARD_REQUIRED": "ON"
       }
+    },
+    {
+      "name": "macos-release",
+      "displayName": "macOS Universal Release (arm64 + x86_64)",
+      "generator": "Xcode",
+      "binaryDir": "${sourceDir}/build/macos-release",
+      "cacheVariables": {
+        "CMAKE_CXX_STANDARD": "17",
+        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+        "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
+      }
     }
   ],
   "buildPresets": [
@@ -57,6 +69,16 @@
       "configuration": "Release",
       "targets": [
         "phu-beat-sync-multi-scope_VST3"
+      ]
+    },
+    {
+      "name": "macos-build",
+      "displayName": "macOS Universal Build",
+      "configurePreset": "macos-release",
+      "configuration": "Release",
+      "targets": [
+        "phu-beat-sync-multi-scope_VST3",
+        "phu-beat-sync-multi-scope_AU"
       ]
     }
   ]
