@@ -288,8 +288,9 @@ jobs:
 
       - name: Generate README.pdf
         run: |
-          npm install -g md-to-pdf
-          md-to-pdf README.md
+          sudo apt-get update -y
+          sudo apt-get install -y pandoc texlive-latex-base texlive-fonts-recommended texlive-latex-recommended librsvg2-bin
+          pandoc README.md -o README.pdf --pdf-engine=pdflatex -V geometry:margin=1in
 
       - name: Inject README.pdf into all release zips
         run: |
