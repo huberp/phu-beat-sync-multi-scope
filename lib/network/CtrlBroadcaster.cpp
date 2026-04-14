@@ -11,8 +11,11 @@
     #include <cstdio>
 #endif
 
-// Include socket headers only in implementation file (needed for sendto/recvfrom)
+// Socket headers must be included before any namespace block.
 #ifdef _WIN32
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
     #ifndef NOMINMAX
         #define NOMINMAX
     #endif

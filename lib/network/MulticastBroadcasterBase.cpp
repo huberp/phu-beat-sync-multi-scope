@@ -4,11 +4,11 @@
 #include <cstring>
 #include <random>
 
-namespace phu {
-namespace network {
-
-// Include socket headers only in implementation file
+// Socket headers must be included before any namespace block.
 #ifdef _WIN32
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
     #ifndef NOMINMAX
         #define NOMINMAX
     #endif
@@ -26,6 +26,9 @@ namespace network {
     #define MCAST_SOCKET_ERROR   (-1)
     #define closesocket close
 #endif
+
+namespace phu {
+namespace network {
 
 #ifdef _WIN32
 bool       MulticastBroadcasterBase::wsaInitialized = false;

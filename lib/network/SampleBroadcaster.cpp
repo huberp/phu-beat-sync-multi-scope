@@ -7,11 +7,11 @@
     #include <cstdio>
 #endif
 
-namespace phu {
-namespace network {
-
-// Include socket headers only in implementation file (needed for sendto/recvfrom)
+// Socket headers must be included before any namespace block.
 #ifdef _WIN32
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
     #ifndef NOMINMAX
         #define NOMINMAX
     #endif
@@ -24,6 +24,9 @@ namespace network {
     #include <sys/socket.h>
     #define INVALID_SOCKET_VALUE -1
 #endif
+
+namespace phu {
+namespace network {
 
 // Protocol magic number: "SMPL" in ASCII
 static constexpr uint32_t PROTOCOL_MAGIC = 0x534D504C;
