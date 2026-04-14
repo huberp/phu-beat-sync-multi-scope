@@ -156,7 +156,7 @@ jobs:
   # ---------------------------------------------------------------------------
   release-macos-intel:
     name: macOS Intel AU + VST3 (x86_64)
-    runs-on: macos-13
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
