@@ -8,10 +8,15 @@
 /**
  * OpenGLScopeRenderer — GPU-accelerated waveform renderer for ScopeDisplay.
  *
- * Implements juce::OpenGLRenderer to draw waveform data using OpenGL shaders
- * and per-instance VBOs.  The displayBins array from each InstanceSlot is
- * uploaded to a GPU buffer once per frame; the vertex shader then maps each
- * bin to its correct screen position.
+ * Uses two shader programs:
+ *
+ *   1. **Waveform shader** — The vertex shader takes a single float Y value per
+ *      vertex and computes X from `gl_VertexID`.  This allows the existing
+ *      displayBins array (Y-only floats) to be uploaded directly to the VBO
+ *      without any CPU-side transformation or staging buffer.
+ *
+ *   2. **Utility shader** — A simple vec2 pass-through used for grid lines and
+ *      the playhead, which require explicit (x, y) coordinates.
  *
  * Lifecycle:
  *   1. Construct and call attachTo(component) to attempt OpenGL initialisation.
@@ -55,7 +60,7 @@ class OpenGLScopeRenderer : public juce::OpenGLRenderer {
         bool            isLocal = false;
         juce::Colour    colour { juce::Colours::green };
         float           alpha  = 1.0f;
-        const float*    bins   = nullptr;  // pointer to displayBins (DISPLAY_BINS floats)
+        const float*    bins   = nullptr;  // pointer to displayBins (DISPLAY_BINS floats, Y-only)
     };
 
     /**
@@ -83,25 +88,31 @@ class OpenGLScopeRenderer : public juce::OpenGLRenderer {
     juce::OpenGLContext m_glContext;
     std::atomic<bool>   m_available { false };
 
-    // Shader program and cached attribute/uniform locations
-    std::unique_ptr<juce::OpenGLShaderProgram> m_shader;
-    GLint m_aPositionLoc = -1;
-    GLint m_uColourLoc   = -1;
+    // --- Waveform shader (Y-only input, X from gl_VertexID) ---
+    std::unique_ptr<juce::OpenGLShaderProgram> m_waveShader;
+    GLint m_wave_aYValueLoc  = -1;   // attribute: float yValue
+    GLint m_wave_uColourLoc  = -1;   // uniform:   vec4  uColour
+    GLint m_wave_uNumBinsLoc = -1;   // uniform:   int   uNumBins
+    GLint m_wave_uAmpScaleLoc = -1;  // uniform:   float uAmpScale
 
-    // Per-instance VBOs (each holds DISPLAY_BINS * 2 floats: x, y interleaved)
+    // --- Utility shader (vec2 position pass-through for grid/playhead) ---
+    std::unique_ptr<juce::OpenGLShaderProgram> m_utilShader;
+    GLint m_util_aPositionLoc = -1;  // attribute: vec2 aPosition
+    GLint m_util_uColourLoc   = -1;  // uniform:   vec4 uColour
+
+    // Per-instance VBOs (each holds DISPLAY_BINS floats — raw Y values)
     GLuint m_vbos[MAX_INSTANCES] {};
     bool   m_vbosCreated = false;
 
-    // Grid VBO
+    // Grid VBO (interleaved x, y pairs)
     GLuint m_gridVbo = 0;
     int    m_gridVertexCount = 0;
     double m_lastGridRangeBeats = -1.0;
 
-    // Playhead VBO
+    // Playhead VBO (2 vertices = 4 floats)
     GLuint m_playheadVbo = 0;
 
-    // Pre-allocated staging buffers (avoid per-frame heap allocation on GL thread)
-    std::vector<float> m_waveformStaging;
+    // Pre-allocated staging buffer for grid (avoid per-frame heap allocation)
     std::vector<float> m_gridStaging;
 
     // Frame data snapshot (protected by spin lock for UI→GL thread handoff)
@@ -139,10 +150,11 @@ class OpenGLScopeRenderer : public juce::OpenGLRenderer {
     bool createShaders();
     void createVBOs();
     void deleteVBOs();
-    void uploadWaveform(int index, const float* bins, int numBins, float ampScale);
+    void uploadWaveform(int index, const float* bins, int numBins);
     void drawGrid(double displayRangeBeats);
     void drawPlayhead(double displayRangeBeats, double currentPpq);
-    void drawWaveform(int index, int numBins, float r, float g, float b, float a);
+    void drawWaveform(int index, int numBins, float ampScale,
+                      float r, float g, float b, float a);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenGLScopeRenderer)
 };

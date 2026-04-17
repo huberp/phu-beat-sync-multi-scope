@@ -7,8 +7,6 @@ using namespace juce::gl;
 // ============================================================================
 
 OpenGLScopeRenderer::OpenGLScopeRenderer() {
-    // Pre-allocate staging buffers to avoid per-frame heap allocation
-    m_waveformStaging.resize(static_cast<size_t>(DISPLAY_BINS) * 2);
     m_gridStaging.reserve(128);
 }
 
@@ -105,9 +103,16 @@ void OpenGLScopeRenderer::newOpenGLContextCreated() {
 // ============================================================================
 
 void OpenGLScopeRenderer::openGLContextClosing() {
-    m_aPositionLoc = -1;
-    m_uColourLoc   = -1;
-    m_shader.reset();
+    m_wave_aYValueLoc   = -1;
+    m_wave_uColourLoc   = -1;
+    m_wave_uNumBinsLoc  = -1;
+    m_wave_uAmpScaleLoc = -1;
+    m_waveShader.reset();
+
+    m_util_aPositionLoc = -1;
+    m_util_uColourLoc   = -1;
+    m_utilShader.reset();
+
     deleteVBOs();
     m_lastGridRangeBeats = -1.0;
     m_available.store(false, std::memory_order_release);
@@ -118,7 +123,7 @@ void OpenGLScopeRenderer::openGLContextClosing() {
 // ============================================================================
 
 void OpenGLScopeRenderer::renderOpenGL() {
-    if (!m_shader || m_aPositionLoc < 0) return;
+    if (!m_waveShader || !m_utilShader) return;
 
     // Swap in the latest frame data
     {
@@ -143,12 +148,14 @@ void OpenGLScopeRenderer::renderOpenGL() {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    m_shader->use();
-
-    // Draw grid
+    // ---- Grid and playhead (utility shader) ----
+    m_utilShader->use();
     drawGrid(m_renderData.displayRangeBeats);
+    if (!m_renderData.broadcastOnly)
+        drawPlayhead(m_renderData.displayRangeBeats, m_renderData.currentPpq);
 
-    // Upload and draw waveforms
+    // ---- Waveforms (waveform shader — Y-only VBO + gl_VertexID) ----
+    m_waveShader->use();
     const int localSlot = m_renderData.localSlotIndex;
 
     // Remote waveforms first (underneath)
@@ -156,8 +163,9 @@ void OpenGLScopeRenderer::renderOpenGL() {
         for (int i = 0; i < MAX_INSTANCES; ++i) {
             const auto& inst = m_renderData.instances[static_cast<size_t>(i)];
             if (inst.isLocal || !inst.active) continue;
-            uploadWaveform(i, inst.bins, DISPLAY_BINS, m_renderData.amplitudeScale);
-            drawWaveform(i, DISPLAY_BINS, inst.r, inst.g, inst.b, inst.a);
+            uploadWaveform(i, inst.bins, DISPLAY_BINS);
+            drawWaveform(i, DISPLAY_BINS, m_renderData.amplitudeScale,
+                         inst.r, inst.g, inst.b, inst.a);
         }
     }
 
@@ -165,14 +173,11 @@ void OpenGLScopeRenderer::renderOpenGL() {
     if (m_renderData.showLocal && !m_renderData.broadcastOnly) {
         const auto& localInst = m_renderData.instances[static_cast<size_t>(localSlot)];
         if (localInst.active) {
-            uploadWaveform(localSlot, localInst.bins, DISPLAY_BINS, m_renderData.amplitudeScale);
-            drawWaveform(localSlot, DISPLAY_BINS, localInst.r, localInst.g, localInst.b, localInst.a);
+            uploadWaveform(localSlot, localInst.bins, DISPLAY_BINS);
+            drawWaveform(localSlot, DISPLAY_BINS, m_renderData.amplitudeScale,
+                         localInst.r, localInst.g, localInst.b, localInst.a);
         }
     }
-
-    // Playhead
-    if (!m_renderData.broadcastOnly)
-        drawPlayhead(m_renderData.displayRangeBeats, m_renderData.currentPpq);
 
     glDisable(GL_BLEND);
 }
@@ -182,50 +187,110 @@ void OpenGLScopeRenderer::renderOpenGL() {
 // ============================================================================
 
 bool OpenGLScopeRenderer::createShaders() {
-    // Vertex shader: takes position attribute vec2(x, y) in clip space [-1, 1]
-    const char* vertexShader = R"(
-        attribute vec2 aPosition;
+    // Check GLSL version — gl_VertexID requires GLSL 1.30+ (OpenGL 3.0+)
+    const double glslVersion = juce::OpenGLShaderProgram::getLanguageVersion();
+    if (glslVersion < 1.29) {
+        DBG("OpenGLScopeRenderer: GLSL version " + juce::String(glslVersion)
+            + " too old (need 1.30+ for gl_VertexID)");
+        return false;
+    }
+
+    // Select the appropriate GLSL version directive.
+    // macOS Core Profile requires >= 150; other platforms accept 130+.
+    juce::String versionLine;
+    bool useModernOutput = false;  // Whether to use `out vec4` vs `gl_FragColor`
+
+    if (glslVersion >= 3.29) {
+        versionLine    = "#version 330\n";
+        useModernOutput = true;
+    } else if (glslVersion >= 1.49) {
+        versionLine = "#version 150\n";
+    } else {
+        versionLine = "#version 130\n";
+    }
+
+    // ---- Waveform shader: Y-only input, X computed from gl_VertexID ----
+    // The displayBins array is uploaded directly as a float-per-vertex VBO.
+    // The shader maps each bin index to clip-space X via gl_VertexID.
+    const juce::String waveVertSrc = versionLine + R"(
+        in float yValue;
+        uniform int   uNumBins;
+        uniform float uAmpScale;
+        void main() {
+            float x = float(gl_VertexID) / float(uNumBins - 1) * 2.0 - 1.0;
+            float y = clamp(yValue * uAmpScale, -1.0, 1.0);
+            gl_Position = vec4(x, y, 0.0, 1.0);
+        }
+    )";
+
+    const juce::String waveFragSrc = versionLine
+        + (useModernOutput ? "out vec4 fragColor;\n" : "")
+        + R"(
+        uniform vec4 uColour;
+        void main() {
+        )" + (useModernOutput ? "    fragColor = uColour;\n" : "    gl_FragColor = uColour;\n")
+        + "}\n";
+
+    m_waveShader = std::make_unique<juce::OpenGLShaderProgram>(m_glContext);
+
+    if (!m_waveShader->addVertexShader(waveVertSrc)) {
+        DBG("OpenGLScopeRenderer: wave vertex shader failed: " + m_waveShader->getLastError());
+        m_waveShader.reset();
+        return false;
+    }
+    if (!m_waveShader->addFragmentShader(waveFragSrc)) {
+        DBG("OpenGLScopeRenderer: wave fragment shader failed: " + m_waveShader->getLastError());
+        m_waveShader.reset();
+        return false;
+    }
+    if (!m_waveShader->link()) {
+        DBG("OpenGLScopeRenderer: wave shader link failed: " + m_waveShader->getLastError());
+        m_waveShader.reset();
+        return false;
+    }
+
+    // Cache waveform shader locations
+    m_wave_aYValueLoc   = m_glContext.extensions.glGetAttribLocation(
+        m_waveShader->getProgramID(), "yValue");
+    m_wave_uColourLoc   = m_waveShader->getUniformIDFromName("uColour");
+    m_wave_uNumBinsLoc  = m_waveShader->getUniformIDFromName("uNumBins");
+    m_wave_uAmpScaleLoc = m_waveShader->getUniformIDFromName("uAmpScale");
+
+    // ---- Utility shader: vec2 pass-through for grid and playhead ----
+    const juce::String utilVertSrc = versionLine + R"(
+        in vec2 aPosition;
         void main() {
             gl_Position = vec4(aPosition, 0.0, 1.0);
         }
     )";
 
-    // Fragment shader: flat colour from uniform.
-    // Precision qualifier required for OpenGL ES compatibility.
-    const char* fragmentShader = R"(
-        #ifdef GL_ES
-        precision mediump float;
-        #endif
-        uniform vec4 uColour;
-        void main() {
-            gl_FragColor = uColour;
-        }
-    )";
+    const juce::String utilFragSrc = waveFragSrc;  // Same fragment shader
 
-    m_shader = std::make_unique<juce::OpenGLShaderProgram>(m_glContext);
+    m_utilShader = std::make_unique<juce::OpenGLShaderProgram>(m_glContext);
 
-    if (!m_shader->addVertexShader(vertexShader)) {
-        DBG("OpenGLScopeRenderer: vertex shader failed: " + m_shader->getLastError());
-        m_shader.reset();
+    if (!m_utilShader->addVertexShader(utilVertSrc)) {
+        DBG("OpenGLScopeRenderer: util vertex shader failed: " + m_utilShader->getLastError());
+        m_utilShader.reset();
+        m_waveShader.reset();
+        return false;
+    }
+    if (!m_utilShader->addFragmentShader(utilFragSrc)) {
+        DBG("OpenGLScopeRenderer: util fragment shader failed: " + m_utilShader->getLastError());
+        m_utilShader.reset();
+        m_waveShader.reset();
+        return false;
+    }
+    if (!m_utilShader->link()) {
+        DBG("OpenGLScopeRenderer: util shader link failed: " + m_utilShader->getLastError());
+        m_utilShader.reset();
+        m_waveShader.reset();
         return false;
     }
 
-    if (!m_shader->addFragmentShader(fragmentShader)) {
-        DBG("OpenGLScopeRenderer: fragment shader failed: " + m_shader->getLastError());
-        m_shader.reset();
-        return false;
-    }
-
-    if (!m_shader->link()) {
-        DBG("OpenGLScopeRenderer: shader link failed: " + m_shader->getLastError());
-        m_shader.reset();
-        return false;
-    }
-
-    // Cache attribute and uniform locations (avoids string lookup per draw call)
-    m_aPositionLoc = m_glContext.extensions.glGetAttribLocation(
-        m_shader->getProgramID(), "aPosition");
-    m_uColourLoc = m_shader->getUniformIDFromName("uColour");
+    // Cache utility shader locations
+    m_util_aPositionLoc = m_glContext.extensions.glGetAttribLocation(
+        m_utilShader->getProgramID(), "aPosition");
+    m_util_uColourLoc   = m_utilShader->getUniformIDFromName("uColour");
 
     return true;
 }
@@ -235,22 +300,20 @@ bool OpenGLScopeRenderer::createShaders() {
 // ============================================================================
 
 void OpenGLScopeRenderer::createVBOs() {
-    // One VBO per waveform instance
+    // One VBO per waveform instance — each holds DISPLAY_BINS floats (Y-only)
     m_glContext.extensions.glGenBuffers(MAX_INSTANCES, m_vbos);
 
-    // Pre-allocate each VBO with DISPLAY_BINS * 2 floats (x, y interleaved)
-    const size_t bufferBytes = static_cast<size_t>(DISPLAY_BINS) * 2 * sizeof(float);
+    const auto bufferBytes = static_cast<GLsizeiptr>(DISPLAY_BINS * sizeof(float));
     for (int i = 0; i < MAX_INSTANCES; ++i) {
         m_glContext.extensions.glBindBuffer(GL_ARRAY_BUFFER, m_vbos[i]);
-        m_glContext.extensions.glBufferData(GL_ARRAY_BUFFER,
-                                            static_cast<GLsizeiptr>(bufferBytes),
+        m_glContext.extensions.glBufferData(GL_ARRAY_BUFFER, bufferBytes,
                                             nullptr, GL_DYNAMIC_DRAW);
     }
 
-    // Grid VBO — pre-allocate with maximum expected grid size
+    // Grid VBO (interleaved x, y pairs)
     m_glContext.extensions.glGenBuffers(1, &m_gridVbo);
 
-    // Playhead VBO — 2 vertices (4 floats)
+    // Playhead VBO — 2 vertices (4 floats: x1,y1, x2,y2)
     m_glContext.extensions.glGenBuffers(1, &m_playheadVbo);
     m_glContext.extensions.glBindBuffer(GL_ARRAY_BUFFER, m_playheadVbo);
     m_glContext.extensions.glBufferData(GL_ARRAY_BUFFER,
@@ -280,34 +343,17 @@ void OpenGLScopeRenderer::deleteVBOs() {
 // Waveform Upload (GL thread)
 // ============================================================================
 
-void OpenGLScopeRenderer::uploadWaveform(int index, const float* bins, int numBins,
-                                          float ampScale) {
+void OpenGLScopeRenderer::uploadWaveform(int index, const float* bins, int numBins) {
     if (index < 0 || index >= MAX_INSTANCES || bins == nullptr || numBins < 2)
         return;
 
-    // Ensure staging buffer is large enough (should already be from constructor)
-    const size_t requiredSize = static_cast<size_t>(numBins) * 2;
-    if (m_waveformStaging.size() < requiredSize)
-        m_waveformStaging.resize(requiredSize);
-
-    // Build interleaved (x, y) vertex data using pre-allocated staging buffer
-    // x: map bin index [0, numBins) to clip space [-1, 1]
-    // y: sample * ampScale clamped to [-1, 1]
-    const float invN = 2.0f / static_cast<float>(numBins - 1);
-
-    for (int i = 0; i < numBins; ++i) {
-        const float x = -1.0f + static_cast<float>(i) * invN;
-        float y = bins[i] * ampScale;
-        y = juce::jlimit(-1.0f, 1.0f, y);
-        m_waveformStaging[static_cast<size_t>(i) * 2]     = x;
-        m_waveformStaging[static_cast<size_t>(i) * 2 + 1] = y;
-    }
-
+    // Upload the raw Y-value array directly — no CPU-side transformation needed.
+    // The vertex shader computes X from gl_VertexID and applies amplitude scaling.
     m_glContext.extensions.glBindBuffer(GL_ARRAY_BUFFER, m_vbos[index]);
     m_glContext.extensions.glBufferSubData(
         GL_ARRAY_BUFFER, 0,
-        static_cast<GLsizeiptr>(requiredSize * sizeof(float)),
-        m_waveformStaging.data());
+        static_cast<GLsizeiptr>(numBins * sizeof(float)),
+        bins);
     m_glContext.extensions.glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
@@ -315,25 +361,33 @@ void OpenGLScopeRenderer::uploadWaveform(int index, const float* bins, int numBi
 // Drawing Helpers (GL thread)
 // ============================================================================
 
-void OpenGLScopeRenderer::drawWaveform(int index, int numBins,
+void OpenGLScopeRenderer::drawWaveform(int index, int numBins, float ampScale,
                                         float r, float g, float b, float a) {
-    if (index < 0 || index >= MAX_INSTANCES || numBins < 2 || m_aPositionLoc < 0) return;
+    if (index < 0 || index >= MAX_INSTANCES || numBins < 2 || m_wave_aYValueLoc < 0)
+        return;
 
-    glUniform4f(m_uColourLoc, r, g, b, a);
+    // Set waveform-shader uniforms
+    glUniform4f(m_wave_uColourLoc, r, g, b, a);
+    glUniform1i(m_wave_uNumBinsLoc, numBins);
+    glUniform1f(m_wave_uAmpScaleLoc, ampScale);
 
     m_glContext.extensions.glBindBuffer(GL_ARRAY_BUFFER, m_vbos[index]);
-    m_glContext.extensions.glEnableVertexAttribArray(static_cast<GLuint>(m_aPositionLoc));
+    m_glContext.extensions.glEnableVertexAttribArray(
+        static_cast<GLuint>(m_wave_aYValueLoc));
     m_glContext.extensions.glVertexAttribPointer(
-        static_cast<GLuint>(m_aPositionLoc),
-        2, GL_FLOAT, GL_FALSE, 0, nullptr);
+        static_cast<GLuint>(m_wave_aYValueLoc),
+        1, GL_FLOAT, GL_FALSE, 0, nullptr);  // 1 component per vertex (Y only)
 
     glDrawArrays(GL_LINE_STRIP, 0, numBins);
 
-    m_glContext.extensions.glDisableVertexAttribArray(static_cast<GLuint>(m_aPositionLoc));
+    m_glContext.extensions.glDisableVertexAttribArray(
+        static_cast<GLuint>(m_wave_aYValueLoc));
     m_glContext.extensions.glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 void OpenGLScopeRenderer::drawGrid(double displayRangeBeats) {
+    if (m_util_aPositionLoc < 0) return;
+
     // Only rebuild grid VBO when display range changes
     if (m_lastGridRangeBeats != displayRangeBeats) {
         m_lastGridRangeBeats = displayRangeBeats;
@@ -351,7 +405,8 @@ void OpenGLScopeRenderer::drawGrid(double displayRangeBeats) {
         if (displayRangeBeats > 0.0) {
             const int numBeats = juce::jmax(1, static_cast<int>(displayRangeBeats));
             for (int i = 0; i <= numBeats; ++i) {
-                const float x = -1.0f + 2.0f * static_cast<float>(i) / static_cast<float>(numBeats);
+                const float x = -1.0f + 2.0f * static_cast<float>(i)
+                                / static_cast<float>(numBeats);
                 m_gridStaging.push_back(x); m_gridStaging.push_back(-1.0f);
                 m_gridStaging.push_back(x); m_gridStaging.push_back( 1.0f);
             }
@@ -368,28 +423,30 @@ void OpenGLScopeRenderer::drawGrid(double displayRangeBeats) {
         m_glContext.extensions.glBindBuffer(GL_ARRAY_BUFFER, m_gridVbo);
     }
 
-    if (m_gridVertexCount <= 0 || m_aPositionLoc < 0) {
+    if (m_gridVertexCount <= 0) {
         m_glContext.extensions.glBindBuffer(GL_ARRAY_BUFFER, 0);
         return;
     }
 
-    // Grid colour: 0xFF333355 → normalised
-    glUniform4f(m_uColourLoc,
+    // Grid colour: 0xFF333355
+    glUniform4f(m_util_uColourLoc,
                 0x33 / 255.0f, 0x33 / 255.0f, 0x55 / 255.0f, 1.0f);
 
-    m_glContext.extensions.glEnableVertexAttribArray(static_cast<GLuint>(m_aPositionLoc));
+    m_glContext.extensions.glEnableVertexAttribArray(
+        static_cast<GLuint>(m_util_aPositionLoc));
     m_glContext.extensions.glVertexAttribPointer(
-        static_cast<GLuint>(m_aPositionLoc),
+        static_cast<GLuint>(m_util_aPositionLoc),
         2, GL_FLOAT, GL_FALSE, 0, nullptr);
 
     glDrawArrays(GL_LINES, 0, m_gridVertexCount);
 
-    m_glContext.extensions.glDisableVertexAttribArray(static_cast<GLuint>(m_aPositionLoc));
+    m_glContext.extensions.glDisableVertexAttribArray(
+        static_cast<GLuint>(m_util_aPositionLoc));
     m_glContext.extensions.glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 void OpenGLScopeRenderer::drawPlayhead(double displayRangeBeats, double currentPpq) {
-    if (displayRangeBeats <= 0.0 || m_aPositionLoc < 0) return;
+    if (displayRangeBeats <= 0.0 || m_util_aPositionLoc < 0) return;
 
     double normPos = std::fmod(currentPpq, displayRangeBeats) / displayRangeBeats;
     if (normPos < 0.0) normPos += 1.0;
@@ -405,15 +462,17 @@ void OpenGLScopeRenderer::drawPlayhead(double displayRangeBeats, double currentP
         vertices);
 
     // Playhead colour: white with some transparency (0xAAFFFFFF)
-    glUniform4f(m_uColourLoc, 1.0f, 1.0f, 1.0f, 0xAA / 255.0f);
+    glUniform4f(m_util_uColourLoc, 1.0f, 1.0f, 1.0f, 0xAA / 255.0f);
 
-    m_glContext.extensions.glEnableVertexAttribArray(static_cast<GLuint>(m_aPositionLoc));
+    m_glContext.extensions.glEnableVertexAttribArray(
+        static_cast<GLuint>(m_util_aPositionLoc));
     m_glContext.extensions.glVertexAttribPointer(
-        static_cast<GLuint>(m_aPositionLoc),
+        static_cast<GLuint>(m_util_aPositionLoc),
         2, GL_FLOAT, GL_FALSE, 0, nullptr);
 
     glDrawArrays(GL_LINES, 0, 2);
 
-    m_glContext.extensions.glDisableVertexAttribArray(static_cast<GLuint>(m_aPositionLoc));
+    m_glContext.extensions.glDisableVertexAttribArray(
+        static_cast<GLuint>(m_util_aPositionLoc));
     m_glContext.extensions.glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
