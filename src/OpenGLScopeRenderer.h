@@ -131,8 +131,8 @@ class OpenGLScopeRenderer : public juce::OpenGLRenderer {
     void createVBOs();
     void deleteVBOs();
     void uploadWaveform(int index, const float* bins, int numBins, float ampScale);
-    void drawGrid(int width, int height, double displayRangeBeats);
-    void drawPlayhead(int width, int height, double displayRangeBeats, double currentPpq);
+    void drawGrid(double displayRangeBeats);
+    void drawPlayhead(double displayRangeBeats, double currentPpq);
     void drawWaveform(int index, int numBins, float r, float g, float b, float a);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenGLScopeRenderer)

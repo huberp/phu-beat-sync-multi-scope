@@ -133,7 +133,7 @@ void OpenGLScopeRenderer::renderOpenGL() {
     m_shader->use();
 
     // Draw grid
-    drawGrid(w, h, m_renderData.displayRangeBeats);
+    drawGrid(m_renderData.displayRangeBeats);
 
     // Upload and draw waveforms
     const int localSlot = m_renderData.localSlotIndex;
@@ -159,7 +159,7 @@ void OpenGLScopeRenderer::renderOpenGL() {
 
     // Playhead
     if (!m_renderData.broadcastOnly)
-        drawPlayhead(w, h, m_renderData.displayRangeBeats, m_renderData.currentPpq);
+        drawPlayhead(m_renderData.displayRangeBeats, m_renderData.currentPpq);
 
     glDisable(GL_BLEND);
     glDisable(GL_LINE_SMOOTH);
@@ -258,7 +258,7 @@ void OpenGLScopeRenderer::deleteVBOs() {
 
 void OpenGLScopeRenderer::uploadWaveform(int index, const float* bins, int numBins,
                                           float ampScale) {
-    if (index < 0 || index >= MAX_INSTANCES || bins == nullptr || numBins <= 0)
+    if (index < 0 || index >= MAX_INSTANCES || bins == nullptr || numBins < 2)
         return;
 
     // Build interleaved (x, y) vertex data
@@ -308,7 +308,7 @@ void OpenGLScopeRenderer::drawWaveform(int index, int numBins,
     m_glContext.extensions.glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
-void OpenGLScopeRenderer::drawGrid(int /*width*/, int /*height*/, double displayRangeBeats) {
+void OpenGLScopeRenderer::drawGrid(double displayRangeBeats) {
     // Build grid lines in clip space
     std::vector<float> vertices;
 
@@ -355,8 +355,7 @@ void OpenGLScopeRenderer::drawGrid(int /*width*/, int /*height*/, double display
     m_glContext.extensions.glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
-void OpenGLScopeRenderer::drawPlayhead(int /*width*/, int /*height*/,
-                                        double displayRangeBeats, double currentPpq) {
+void OpenGLScopeRenderer::drawPlayhead(double displayRangeBeats, double currentPpq) {
     if (displayRangeBeats <= 0.0) return;
 
     double normPos = std::fmod(currentPpq, displayRangeBeats) / displayRangeBeats;

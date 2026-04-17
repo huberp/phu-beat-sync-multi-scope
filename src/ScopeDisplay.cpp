@@ -856,7 +856,7 @@ void ScopeDisplay::drawPlayhead(juce::Graphics& g, juce::Rectangle<float> area) 
 // ============================================================================
 
 void ScopeDisplay::updateGLFrameData() {
-    if (!m_glRenderer) return;
+    if (!isOpenGLActive()) return;
 
     std::array<OpenGLScopeRenderer::WaveformInstance, MAX_INSTANCES> glInstances;
     const int localSlot = m_localInstanceIndex - 1;
