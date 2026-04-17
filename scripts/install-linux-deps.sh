@@ -35,6 +35,11 @@ apt-get install -y \
     libxrandr-dev \
     libxrender-dev
 
+# OpenGL dependencies (for hardware-accelerated waveform rendering)
+apt-get install -y \
+    libgl-dev \
+    libglu1-mesa-dev
+
 echo "✓ All required dependencies installed successfully!"
 echo ""
 echo "Note: This installs only the minimal dependencies required for this plugin."

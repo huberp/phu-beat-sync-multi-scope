@@ -22,6 +22,8 @@ target_sources(phu-beat-sync-multi-scope PRIVATE
     PluginEditor.h
     ScopeDisplay.cpp
     ScopeDisplay.h
+    OpenGLScopeRenderer.cpp
+    OpenGLScopeRenderer.h
     DisplayFilterStrip.cpp
     DisplayFilterStrip.h
     DebugLogPanel.cpp
@@ -62,6 +64,7 @@ target_link_libraries(phu-beat-sync-multi-scope
         BeatSyncLib
         juce::juce_audio_processors
         juce::juce_dsp
+        juce::juce_opengl
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags

@@ -5,6 +5,7 @@
 #include "../lib/LinkwitzRileyFilter.h"
 #include "../lib/network/CtrlBroadcaster.h"
 #include "../lib/network/SampleBroadcaster.h"
+#include "OpenGLScopeRenderer.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <array>
 #include <map>
@@ -34,9 +35,15 @@ class ScopeDisplay : public juce::Component {
     static constexpr int DISPLAY_BINS  = 4096;
 
     ScopeDisplay();
-    ~ScopeDisplay() override = default;
+    ~ScopeDisplay() override;
 
     void paint(juce::Graphics& g) override;
+
+    /** Called when the component is added to a parent; used to initialise the OpenGL context. */
+    void parentHierarchyChanged() override;
+
+    /** Returns true if the OpenGL renderer is active and drawing waveforms. */
+    bool isOpenGLActive() const;
 
     // -------------------------------------------------------------------------
     // Configuration
@@ -243,6 +250,16 @@ class ScopeDisplay : public juce::Component {
      *  writes data this frame.  Consumed and cleared by the editor's timerCallback()
      *  to skip computeFrame() + repaint() when nothing changed (DAW stopped). */
     bool m_frameHasNewData = false;
+
+    // -------------------------------------------------------------------------
+    // OpenGL accelerated rendering (optional)
+    // -------------------------------------------------------------------------
+
+    std::unique_ptr<OpenGLScopeRenderer> m_glRenderer;
+    bool m_glAttachAttempted = false;
+
+    /** Push current frame data to the OpenGL renderer (if active). */
+    void updateGLFrameData();
 
     // -------------------------------------------------------------------------
     // Private helpers
