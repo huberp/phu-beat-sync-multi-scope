@@ -12,6 +12,25 @@ ScopeDisplay::ScopeDisplay() {
     m_instances[0].instanceID = 0; // local has no remote ID
 }
 
+ScopeDisplay::~ScopeDisplay() {
+    if (m_glRenderer)
+        m_glRenderer->detach();
+}
+
+void ScopeDisplay::parentHierarchyChanged() {
+    // Attempt to attach the OpenGL context once this component has a parent
+    // (and therefore a valid native window handle).
+    if (!m_glAttachAttempted && getParentComponent() != nullptr) {
+        m_glAttachAttempted = true;
+        m_glRenderer = std::make_unique<OpenGLScopeRenderer>();
+        m_glRenderer->attachTo(*this);
+    }
+}
+
+bool ScopeDisplay::isOpenGLActive() const {
+    return m_glRenderer && m_glRenderer->isAvailable();
+}
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -318,6 +337,10 @@ void ScopeDisplay::computeFrame() {
         recomputeRms();
     if (m_showCancellation)
         recomputeCancellation();
+
+    // Push frame data to the OpenGL renderer if active
+    if (isOpenGLActive())
+        updateGLFrameData();
 }
 
 void ScopeDisplay::scatterInstance(InstanceSlot& inst) {
@@ -522,11 +545,17 @@ void ScopeDisplay::recomputeCancellation() {
 void ScopeDisplay::paint(juce::Graphics& g) {
     auto bounds = getLocalBounds().toFloat();
 
-    // Background
-    g.fillAll(juce::Colour(0xFF1A1A2E));
+    const bool glActive = isOpenGLActive();
 
-    // Grid lines
-    drawGrid(g, bounds);
+    // When OpenGL is active, it renders the background, grid, waveforms, and
+    // playhead via the GL pipeline.  We only need to draw overlays (RMS,
+    // cancellation), remote labels, broadcast-only overlay, and the border
+    // using JUCE's software Graphics context.
+    if (!glActive) {
+        // Software fallback: full paint
+        g.fillAll(juce::Colour(0xFF1A1A2E));
+        drawGrid(g, bounds);
+    }
 
     // Determine whether any remote instance is active
     bool hasActiveRemotes = false;
@@ -589,10 +618,14 @@ void ScopeDisplay::paint(juce::Graphics& g) {
                 colour = getRemoteColour(i);
             }
 
-            drawWaveform(g, bounds, inst.displayBins.data(),
-                         static_cast<int>(inst.displayBins.size()),
-                         colour, 0.5f);
+            // Software waveform drawing (skipped when OpenGL is active)
+            if (!glActive) {
+                drawWaveform(g, bounds, inst.displayBins.data(),
+                             static_cast<int>(inst.displayBins.size()),
+                             colour, 0.5f);
+            }
 
+            // Labels are always drawn via software (text rendering)
             if (label.isNotEmpty()) {
                 g.setColour(colour.withAlpha(0.85f));
                 g.setFont(juce::Font(juce::FontOptions(11.0f)));
@@ -605,17 +638,19 @@ void ScopeDisplay::paint(juce::Graphics& g) {
         }
     }
 
-    // Local waveform (on top)
-    const auto& localInst = m_instances[localSlot];
-    if (m_showLocal && !localInst.displayBins.empty()) {
-        drawWaveform(g, bounds,
-                     localInst.displayBins.data(),
-                     static_cast<int>(localInst.displayBins.size()),
-                     m_localColour, 1.0f);
+    // Local waveform (on top) — software only
+    if (!glActive) {
+        const auto& localInst = m_instances[localSlot];
+        if (m_showLocal && !localInst.displayBins.empty()) {
+            drawWaveform(g, bounds,
+                         localInst.displayBins.data(),
+                         static_cast<int>(localInst.displayBins.size()),
+                         m_localColour, 1.0f);
+        }
     }
 
-    // Playhead
-    if (!m_broadcastOnlyOverlayEnabled)
+    // Playhead — software only
+    if (!glActive && !m_broadcastOnlyOverlayEnabled)
         drawPlayhead(g, bounds);
 
     if (m_broadcastOnlyOverlayEnabled) {
@@ -819,6 +854,47 @@ void ScopeDisplay::drawPlayhead(juce::Graphics& g, juce::Rectangle<float> area) 
 // ============================================================================
 // Helpers
 // ============================================================================
+
+void ScopeDisplay::updateGLFrameData() {
+    if (!m_glRenderer) return;
+
+    std::array<OpenGLScopeRenderer::WaveformInstance, MAX_INSTANCES> glInstances;
+    const int localSlot = m_localInstanceIndex - 1;
+
+    for (int i = 0; i < MAX_INSTANCES; ++i) {
+        const auto& inst = m_instances[i];
+        auto& glInst = glInstances[static_cast<size_t>(i)];
+        glInst.active  = inst.active;
+        glInst.isLocal = inst.isLocal;
+
+        if (inst.isLocal) {
+            glInst.colour = m_localColour;
+            glInst.alpha  = 1.0f;
+        } else {
+            auto infoIt = m_remoteInfoMap.find(inst.instanceID);
+            if (infoIt != m_remoteInfoMap.end()) {
+                const auto& info = infoIt->second;
+                glInst.colour = juce::Colour(info.colourRGBA[0], info.colourRGBA[1],
+                                              info.colourRGBA[2], info.colourRGBA[3]);
+            } else {
+                glInst.colour = getRemoteColour(i);
+            }
+            glInst.alpha = 0.5f;
+        }
+
+        if (inst.active && !inst.displayBins.empty())
+            glInst.bins = inst.displayBins.data();
+    }
+
+    m_glRenderer->setFrameData(glInstances,
+                               m_amplitudeScale,
+                               m_displayRangeBeats,
+                               m_currentPpq,
+                               m_showLocal,
+                               m_showRemote,
+                               m_broadcastOnlyOverlayEnabled,
+                               localSlot);
+}
 
 float ScopeDisplay::sampleToY(float sample, float top, float height) const {
     const float scaled = juce::jlimit(-1.0f, 1.0f, sample * m_amplitudeScale);
