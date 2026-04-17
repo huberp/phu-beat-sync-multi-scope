@@ -47,7 +47,10 @@ void OpenGLScopeRenderer::setFrameData(
     bool showLocal,
     bool showRemote,
     bool broadcastOnlyOverlay,
-    int localSlotIndex)
+    int localSlotIndex,
+    const float* rmsValues,
+    int numRmsBars,
+    bool showRms)
 {
     // Capture viewport dimensions on UI thread (component is only safe here)
     int vpW = 0, vpH = 0;
@@ -80,6 +83,16 @@ void OpenGLScopeRenderer::setFrameData(
     m_pendingData.localSlotIndex    = localSlotIndex;
     m_pendingData.viewportWidth     = vpW;
     m_pendingData.viewportHeight    = vpH;
+
+    // RMS overlay
+    m_pendingData.showRms    = showRms;
+    m_pendingData.numRmsBars = 0;
+    if (showRms && rmsValues != nullptr && numRmsBars > 0) {
+        const int bars = juce::jmin(numRmsBars, RmsOverlayRenderer::MAX_RMS_BARS);
+        std::memcpy(m_pendingData.rmsValues, rmsValues, static_cast<size_t>(bars) * sizeof(float));
+        m_pendingData.numRmsBars = bars;
+    }
+
     m_newDataAvailable = true;
 }
 
@@ -95,6 +108,7 @@ void OpenGLScopeRenderer::newOpenGLContextCreated() {
     }
 
     createVBOs();
+    m_rmsRenderer.create(m_glContext);  // Non-fatal: RMS overlay just won't draw on failure
     m_available.store(true, std::memory_order_release);
 }
 
@@ -112,6 +126,8 @@ void OpenGLScopeRenderer::openGLContextClosing() {
     m_util_aPositionLoc = -1;
     m_util_uColourLoc   = -1;
     m_utilShader.reset();
+
+    m_rmsRenderer.release();
 
     deleteVBOs();
     m_lastGridRangeBeats = -1.0;
@@ -177,6 +193,14 @@ void OpenGLScopeRenderer::renderOpenGL() {
             drawWaveform(localSlot, DISPLAY_BINS, m_renderData.amplitudeScale,
                          localInst.r, localInst.g, localInst.b, localInst.a);
         }
+    }
+
+    // ---- RMS overlay (RmsOverlayRenderer) ----
+    if (m_renderData.showRms && m_rmsRenderer.isReady() && m_renderData.numRmsBars > 0) {
+        m_rmsRenderer.draw(m_renderData.numRmsBars,
+                           m_renderData.rmsValues,
+                           m_renderData.amplitudeScale,
+                           h);
     }
 
     glDisable(GL_BLEND);

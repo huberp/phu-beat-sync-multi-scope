@@ -4,11 +4,12 @@
 #include <juce_opengl/juce_opengl.h>
 #include <array>
 #include <vector>
+#include "RmsOverlayRenderer.h"
 
 /**
  * OpenGLScopeRenderer — GPU-accelerated waveform renderer for ScopeDisplay.
  *
- * Uses two shader programs:
+ * Uses three shader programs:
  *
  *   1. **Waveform shader** — The vertex shader takes a single float Y value per
  *      vertex and computes X from `gl_VertexID`.  This allows the existing
@@ -17,6 +18,9 @@
  *
  *   2. **Utility shader** — A simple vec2 pass-through used for grid lines and
  *      the playhead, which require explicit (x, y) coordinates.
+ *
+ *   3. **RMS overlay** — Delegated to RmsOverlayRenderer; no VBO, geometry
+ *      computed from gl_VertexID using a uniform float[128] RMS array.
  *
  * Lifecycle:
  *   1. Construct and call attachTo(component) to attempt OpenGL initialisation.
@@ -74,7 +78,10 @@ class OpenGLScopeRenderer : public juce::OpenGLRenderer {
                       bool showLocal,
                       bool showRemote,
                       bool broadcastOnlyOverlay,
-                      int localSlotIndex);
+                      int localSlotIndex,
+                      const float* rmsValues,
+                      int numRmsBars,
+                      bool showRms);
 
     // -------------------------------------------------------------------------
     // OpenGLRenderer overrides (called on GL thread)
@@ -99,6 +106,9 @@ class OpenGLScopeRenderer : public juce::OpenGLRenderer {
     std::unique_ptr<juce::OpenGLShaderProgram> m_utilShader;
     GLint m_util_aPositionLoc = -1;  // attribute: vec2 aPosition
     GLint m_util_uColourLoc   = -1;  // uniform:   vec4 uColour
+
+    // --- RMS overlay (modular, own shader via RmsOverlayRenderer) ---
+    RmsOverlayRenderer m_rmsRenderer;
 
     // Per-instance VBOs (each holds DISPLAY_BINS floats — raw Y values)
     GLuint m_vbos[MAX_INSTANCES] {};
@@ -133,6 +143,11 @@ class OpenGLScopeRenderer : public juce::OpenGLRenderer {
         int    localSlotIndex    = 0;
         int    viewportWidth     = 0;
         int    viewportHeight    = 0;
+
+        // RMS overlay
+        float rmsValues[RmsOverlayRenderer::MAX_RMS_BARS] {};
+        int   numRmsBars = 0;
+        bool  showRms    = false;
     };
 
     juce::SpinLock m_dataLock;

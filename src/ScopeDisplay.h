@@ -5,7 +5,7 @@
 #include "../lib/LinkwitzRileyFilter.h"
 #include "../lib/network/CtrlBroadcaster.h"
 #include "../lib/network/SampleBroadcaster.h"
-#include "OpenGLScopeRenderer.h"
+#include "gl/ScopeGLCoordinator.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <array>
 #include <map>
@@ -255,7 +255,7 @@ class ScopeDisplay : public juce::Component {
     // OpenGL accelerated rendering (optional)
     // -------------------------------------------------------------------------
 
-    std::unique_ptr<OpenGLScopeRenderer> m_glRenderer;
+    std::unique_ptr<ScopeGLCoordinator> m_glCoordinator;
     bool m_glAttachAttempted = false;
 
     /** Push current frame data to the OpenGL renderer (if active). */

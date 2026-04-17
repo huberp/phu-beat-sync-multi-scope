@@ -13,8 +13,8 @@ ScopeDisplay::ScopeDisplay() {
 }
 
 ScopeDisplay::~ScopeDisplay() {
-    if (m_glRenderer)
-        m_glRenderer->detach();
+    if (m_glCoordinator)
+        m_glCoordinator->detach();
 }
 
 void ScopeDisplay::parentHierarchyChanged() {
@@ -22,13 +22,13 @@ void ScopeDisplay::parentHierarchyChanged() {
     // (and therefore a valid native window handle).
     if (!m_glAttachAttempted && getParentComponent() != nullptr) {
         m_glAttachAttempted = true;
-        m_glRenderer = std::make_unique<OpenGLScopeRenderer>();
-        m_glRenderer->attachTo(*this);
+        m_glCoordinator = std::make_unique<ScopeGLCoordinator>();
+        m_glCoordinator->attachTo(*this);
     }
 }
 
 bool ScopeDisplay::isOpenGLActive() const {
-    return m_glRenderer && m_glRenderer->isAvailable();
+    return m_glCoordinator && m_glCoordinator->isAvailable();
 }
 
 // ============================================================================
@@ -573,7 +573,7 @@ void ScopeDisplay::paint(juce::Graphics& g) {
         m_lastOverlayHeight  = h;
     }
 
-    if (m_showRms) {
+    if (m_showRms && !glActive) {
         if (m_rmsOverlayDirty) {
             m_rmsOverlayImage = juce::Image(
                 juce::Image::ARGB, juce::jmax(1, w), juce::jmax(1, h), true);
@@ -858,42 +858,50 @@ void ScopeDisplay::drawPlayhead(juce::Graphics& g, juce::Rectangle<float> area) 
 void ScopeDisplay::updateGLFrameData() {
     if (!isOpenGLActive()) return;
 
-    std::array<OpenGLScopeRenderer::WaveformInstance, MAX_INSTANCES> glInstances;
     const int localSlot = m_localInstanceIndex - 1;
 
+    // --- Waveform data ---
+    std::array<ScopeGLCoordinator::WaveformInstanceData, MAX_INSTANCES> glInstances;
     for (int i = 0; i < MAX_INSTANCES; ++i) {
         const auto& inst = m_instances[i];
-        auto& glInst = glInstances[static_cast<size_t>(i)];
-        glInst.active  = inst.active;
-        glInst.isLocal = inst.isLocal;
+        auto& dst = glInstances[static_cast<size_t>(i)];
+        dst.active  = inst.active;
+        dst.isLocal = inst.isLocal;
 
         if (inst.isLocal) {
-            glInst.colour = m_localColour;
-            glInst.alpha  = 1.0f;
+            dst.colour = m_localColour;
+            dst.alpha  = 1.0f;
         } else {
             auto infoIt = m_remoteInfoMap.find(inst.instanceID);
             if (infoIt != m_remoteInfoMap.end()) {
                 const auto& info = infoIt->second;
-                glInst.colour = juce::Colour(info.colourRGBA[0], info.colourRGBA[1],
-                                              info.colourRGBA[2], info.colourRGBA[3]);
+                dst.colour = juce::Colour(info.colourRGBA[0], info.colourRGBA[1],
+                                          info.colourRGBA[2], info.colourRGBA[3]);
             } else {
-                glInst.colour = getRemoteColour(i);
+                dst.colour = getRemoteColour(i);
             }
-            glInst.alpha = 0.5f;
+            dst.alpha = 0.5f;
         }
 
         if (inst.active && !inst.displayBins.empty())
-            glInst.bins = inst.displayBins.data();
+            dst.bins = inst.displayBins.data();
     }
 
-    m_glRenderer->setFrameData(glInstances,
-                               m_amplitudeScale,
-                               m_displayRangeBeats,
-                               m_currentPpq,
-                               m_showLocal,
-                               m_showRemote,
-                               m_broadcastOnlyOverlayEnabled,
-                               localSlot);
+    m_glCoordinator->setWaveformData(glInstances, m_amplitudeScale,
+                                     m_showLocal, m_showRemote,
+                                     m_broadcastOnlyOverlayEnabled, localSlot);
+
+    // --- Grid / playhead data ---
+    m_glCoordinator->setGridPlayheadData(m_displayRangeBeats, m_currentPpq,
+                                         m_broadcastOnlyOverlayEnabled);
+
+    // --- RMS overlay data ---
+    // Use the combined sum when remotes are visible; local-only RMS otherwise.
+    bool hasRemotes = false;
+    for (int i = 0; i < MAX_INSTANCES; ++i)
+        if (i != localSlot && m_instances[i].active) { hasRemotes = true; break; }
+    const float* rmsData = (m_showRemote && hasRemotes) ? m_rmsSum : m_rmsLocal;
+    m_glCoordinator->setRmsData(rmsData, m_numActiveRmsBuckets, m_amplitudeScale, m_showRms);
 }
 
 float ScopeDisplay::sampleToY(float sample, float top, float height) const {

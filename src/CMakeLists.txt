@@ -22,13 +22,21 @@ target_sources(phu-beat-sync-multi-scope PRIVATE
     PluginEditor.h
     ScopeDisplay.cpp
     ScopeDisplay.h
-    OpenGLScopeRenderer.cpp
-    OpenGLScopeRenderer.h
     DisplayFilterStrip.cpp
     DisplayFilterStrip.h
     DebugLogPanel.cpp
     DebugLogPanel.h
 
+    #opengl renderers
+    gl/WaveformGLRenderer.cpp
+    gl/WaveformGLRenderer.h
+    gl/ScopeGLCoordinator.cpp
+    gl/ScopeGLCoordinator.h
+    gl/GridPlayheadGLRenderer.cpp
+    gl/GridPlayheadGLRenderer.h
+    gl/RmsOverlayRenderer.cpp
+    gl/RmsOverlayRenderer.h
+    
     # Debug components (moved to lib/debug/)
     ../lib/debug/EditorLogger.cpp
     ../lib/debug/EditorLogger.h
