@@ -21,7 +21,7 @@
  *   4. Call detach() or destroy to release OpenGL resources.
  *
  * Thread safety:
- *   - setWaveformData() copies display data from the UI thread.
+ *   - setFrameData() copies display data from the UI thread.
  *   - renderOpenGL() runs on the GL thread and reads the latest snapshot.
  *   - A SpinLock protects the data hand-off.
  */
@@ -83,8 +83,10 @@ class OpenGLScopeRenderer : public juce::OpenGLRenderer {
     juce::OpenGLContext m_glContext;
     std::atomic<bool>   m_available { false };
 
-    // Shader program
+    // Shader program and cached attribute/uniform locations
     std::unique_ptr<juce::OpenGLShaderProgram> m_shader;
+    GLint m_aPositionLoc = -1;
+    GLint m_uColourLoc   = -1;
 
     // Per-instance VBOs (each holds DISPLAY_BINS * 2 floats: x, y interleaved)
     GLuint m_vbos[MAX_INSTANCES] {};
@@ -93,9 +95,14 @@ class OpenGLScopeRenderer : public juce::OpenGLRenderer {
     // Grid VBO
     GLuint m_gridVbo = 0;
     int    m_gridVertexCount = 0;
+    double m_lastGridRangeBeats = -1.0;
 
     // Playhead VBO
     GLuint m_playheadVbo = 0;
+
+    // Pre-allocated staging buffers (avoid per-frame heap allocation on GL thread)
+    std::vector<float> m_waveformStaging;
+    std::vector<float> m_gridStaging;
 
     // Frame data snapshot (protected by spin lock for UI→GL thread handoff)
     struct FrameSnapshot {
@@ -113,6 +120,8 @@ class OpenGLScopeRenderer : public juce::OpenGLRenderer {
         bool   showRemote        = true;
         bool   broadcastOnly     = false;
         int    localSlotIndex    = 0;
+        int    viewportWidth     = 0;
+        int    viewportHeight    = 0;
     };
 
     juce::SpinLock m_dataLock;
@@ -120,7 +129,7 @@ class OpenGLScopeRenderer : public juce::OpenGLRenderer {
     FrameSnapshot  m_renderData;
     bool           m_newDataAvailable = false;
 
-    // Component pointer (for size queries on GL thread)
+    // Component pointer (for attachTo/detach lifecycle only — not accessed on GL thread)
     juce::Component* m_targetComponent = nullptr;
 
     // -------------------------------------------------------------------------
