@@ -189,7 +189,7 @@ void OpenGLScopeRenderer::renderOpenGL() {
 bool OpenGLScopeRenderer::createShaders() {
     // Check GLSL version — gl_VertexID requires GLSL 1.30+ (OpenGL 3.0+)
     const double glslVersion = juce::OpenGLShaderProgram::getLanguageVersion();
-    if (glslVersion < 1.29) {
+    if (glslVersion < 1.30) {
         DBG("OpenGLScopeRenderer: GLSL version " + juce::String(glslVersion)
             + " too old (need 1.30+ for gl_VertexID)");
         return false;
@@ -200,10 +200,10 @@ bool OpenGLScopeRenderer::createShaders() {
     juce::String versionLine;
     bool useModernOutput = false;  // Whether to use `out vec4` vs `gl_FragColor`
 
-    if (glslVersion >= 3.29) {
+    if (glslVersion >= 3.30) {
         versionLine    = "#version 330\n";
         useModernOutput = true;
-    } else if (glslVersion >= 1.49) {
+    } else if (glslVersion >= 1.50) {
         versionLine = "#version 150\n";
     } else {
         versionLine = "#version 130\n";
@@ -217,13 +217,14 @@ bool OpenGLScopeRenderer::createShaders() {
         uniform int   uNumBins;
         uniform float uAmpScale;
         void main() {
-            float x = float(gl_VertexID) / float(uNumBins - 1) * 2.0 - 1.0;
+            float x = float(gl_VertexID) / float(max(uNumBins - 1, 1)) * 2.0 - 1.0;
             float y = clamp(yValue * uAmpScale, -1.0, 1.0);
             gl_Position = vec4(x, y, 0.0, 1.0);
         }
     )";
 
-    const juce::String waveFragSrc = versionLine
+    // Fragment shader shared by both waveform and utility shaders (flat colour output)
+    const juce::String commonFragSrc = versionLine
         + (useModernOutput ? "out vec4 fragColor;\n" : "")
         + R"(
         uniform vec4 uColour;
@@ -238,7 +239,7 @@ bool OpenGLScopeRenderer::createShaders() {
         m_waveShader.reset();
         return false;
     }
-    if (!m_waveShader->addFragmentShader(waveFragSrc)) {
+    if (!m_waveShader->addFragmentShader(commonFragSrc)) {
         DBG("OpenGLScopeRenderer: wave fragment shader failed: " + m_waveShader->getLastError());
         m_waveShader.reset();
         return false;
@@ -264,7 +265,7 @@ bool OpenGLScopeRenderer::createShaders() {
         }
     )";
 
-    const juce::String utilFragSrc = waveFragSrc;  // Same fragment shader
+    const juce::String utilFragSrc = commonFragSrc;  // Same flat-colour fragment shader
 
     m_utilShader = std::make_unique<juce::OpenGLShaderProgram>(m_glContext);
 
