@@ -10,7 +10,7 @@ namespace audio {
 /**
  * RawSampleBuffer — position-addressed overwrite ring buffer for beat-synced audio.
  *
- * Owns a flat float array of size N = ceil(displayBeats × 60/bpm × sampleRate).
+ * Owns a flat SampleType array of size N = ceil(displayBeats × 60/bpm × sampleRate).
  * Samples are written at position-mapped indices derived from the absolute PPQ:
  *
  *   normPos  = fmod(ppq, displayBeats) / displayBeats   // [0, 1)
@@ -24,6 +24,7 @@ namespace audio {
  *
  * Thread safety: all operations are intended to run exclusively on the UI thread.
  */
+template <typename SampleType = float>
 class RawSampleBuffer {
   public:
     /** Half-open index range returned by write(); used to mark bucket regions dirty. */
@@ -58,7 +59,7 @@ class RawSampleBuffer {
      * sets dirty after calling this method.
      */
     void resize(int newSize) {
-        m_buffer.assign(static_cast<size_t>(newSize > 0 ? newSize : 0), 0.0f);
+        m_buffer.assign(static_cast<size_t>(newSize > 0 ? newSize : 0), SampleType{});
         m_size = newSize > 0 ? newSize : 0;
     }
 
@@ -70,7 +71,7 @@ class RawSampleBuffer {
      * @return        WriteRange{writeIdx, writeIdx+1} for dirty-marking bucket sets.
      *                Returns {0, 0} if the buffer is empty.
      */
-    WriteRange write(float sample, double ppq) {
+    WriteRange write(SampleType sample, double ppq) {
         if (m_size <= 0)
             return {0, 0};
 
@@ -113,24 +114,24 @@ class RawSampleBuffer {
      * @param idx   Buffer index in [0, size()-1].
      * @param val   Sample value to store.
      */
-    void writeAt(int idx, float val) {
+    void writeAt(int idx, SampleType val) {
         m_buffer[static_cast<size_t>(idx)] = val;
     }
 
     /** Direct read access to the sample array for scatter/RMS passes. */
-    const float* data() const { return m_buffer.data(); }
+    const SampleType* data() const { return m_buffer.data(); }
 
     /** Number of samples currently allocated in the buffer. */
     int size() const { return m_size; }
 
-    /** Clear all samples to 0.0 without reallocating. */
-    void clear() { std::fill(m_buffer.begin(), m_buffer.end(), 0.0f); }
+    /** Clear all samples to 0 without reallocating. */
+    void clear() { std::fill(m_buffer.begin(), m_buffer.end(), SampleType{}); }
 
     /** The display range (beats) this buffer was last prepared for. */
     double displayBeats() const { return m_displayBeats; }
 
   private:
-    std::vector<float> m_buffer;
+    std::vector<SampleType> m_buffer;
     int    m_size         = 0;
     double m_displayBeats = 1.0;
 };

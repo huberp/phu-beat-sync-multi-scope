@@ -155,7 +155,7 @@ class ScopeDisplay : public juce::Component {
     // -------------------------------------------------------------------------
 
     struct InstanceSlot {
-        phu::audio::RawSampleBuffer  buffer;
+        phu::audio::RawSampleBuffer<float> buffer;
         phu::audio::BucketSet        rmsBuckets   { phu::audio::BucketSet::Kind::Rms    };
         phu::audio::BucketSet        cancelBuckets{ phu::audio::BucketSet::Kind::Cancel };
         LinkwitzRiley::LinkwitzRileyFilter<float> filterHP;

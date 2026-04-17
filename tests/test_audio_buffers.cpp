@@ -65,20 +65,20 @@ void runTest(const std::string& name, std::function<void()> fn) {
 // ---------------------------------------------------------------------------
 
 void test_rawbuffer_default_state() {
-    phu::audio::RawSampleBuffer buf;
+    phu::audio::RawSampleBuffer<> buf;
     EXPECT(buf.size() == 0);
     EXPECT(buf.data() == nullptr);
 }
 
 void test_rawbuffer_prepare_size() {
-    phu::audio::RawSampleBuffer buf;
+    phu::audio::RawSampleBuffer<> buf;
     // 1 beat at 120 BPM, 48000 Hz  →  N = ceil(0.5 × 48000) = 24000
     buf.prepare(1.0, 120.0, 48000.0);
     EXPECT(buf.size() == 24000);
 }
 
 void test_rawbuffer_prepare_size_ceil() {
-    phu::audio::RawSampleBuffer buf;
+    phu::audio::RawSampleBuffer<> buf;
     // 1 beat at 100 BPM, 44100 Hz  →  seconds = 60/100 = 0.6
     //   N = ceil(0.6 × 44100) = ceil(26460) = 26460
     buf.prepare(1.0, 100.0, 44100.0);
@@ -86,7 +86,7 @@ void test_rawbuffer_prepare_size_ceil() {
 }
 
 void test_rawbuffer_resize_clears() {
-    phu::audio::RawSampleBuffer buf;
+    phu::audio::RawSampleBuffer<> buf;
     buf.prepare(1.0, 120.0, 48000.0);
 
     // Write something
@@ -101,7 +101,7 @@ void test_rawbuffer_resize_clears() {
 }
 
 void test_rawbuffer_write_index_zero_ppq() {
-    phu::audio::RawSampleBuffer buf;
+    phu::audio::RawSampleBuffer<> buf;
     buf.prepare(1.0, 120.0, 48000.0);
 
     auto r = buf.write(0.5f, 0.0);
@@ -112,7 +112,7 @@ void test_rawbuffer_write_index_zero_ppq() {
 }
 
 void test_rawbuffer_write_index_mid() {
-    phu::audio::RawSampleBuffer buf;
+    phu::audio::RawSampleBuffer<> buf;
     // N = 1000 for simplicity (resize directly)
     buf.resize(1000);
     // displayBeats defaults to 1.0 after default-construct; but resize() doesn't
@@ -127,7 +127,7 @@ void test_rawbuffer_write_index_mid() {
 }
 
 void test_rawbuffer_write_wraps_display_range() {
-    phu::audio::RawSampleBuffer buf;
+    phu::audio::RawSampleBuffer<> buf;
     // displayBeats = 2, N = 2000
     buf.prepare(2.0, 60.0, 1000.0); // 2 beats at 60 BPM, SR=1000 → N=2000
     EXPECT(buf.size() == 2000);
@@ -140,7 +140,7 @@ void test_rawbuffer_write_wraps_display_range() {
 }
 
 void test_rawbuffer_write_returns_range() {
-    phu::audio::RawSampleBuffer buf;
+    phu::audio::RawSampleBuffer<> buf;
     buf.prepare(1.0, 60.0, 1000.0);
 
     auto r = buf.write(1.0f, 0.75);
@@ -150,7 +150,7 @@ void test_rawbuffer_write_returns_range() {
 }
 
 void test_rawbuffer_clear() {
-    phu::audio::RawSampleBuffer buf;
+    phu::audio::RawSampleBuffer<> buf;
     buf.resize(10);
     buf.write(1.0f, 0.0);
     buf.clear();
@@ -159,14 +159,14 @@ void test_rawbuffer_clear() {
 }
 
 void test_rawbuffer_empty_write_returns_zero_range() {
-    phu::audio::RawSampleBuffer buf; // size == 0
+    phu::audio::RawSampleBuffer<> buf; // size == 0
     auto r = buf.write(1.0f, 0.5);
     EXPECT(r.from == 0);
     EXPECT(r.to   == 0);
 }
 
 void test_rawbuffer_write_negative_ppq_wraps() {
-    phu::audio::RawSampleBuffer buf;
+    phu::audio::RawSampleBuffer<> buf;
     // N=1000, displayBeats=1.0; ppq=-0.5 → fmod(-0.5,1.0)/1.0 = -0.5 → normalized = 0.5 → idx=500
     buf.prepare(1.0, 60.0, 1000.0);
     auto r = buf.write(0.75f, -0.5);
@@ -437,7 +437,7 @@ void test_bucketset_recompute_empty_buffer() {
 // ---------------------------------------------------------------------------
 
 void test_integration_write_and_mark_dirty() {
-    using phu::audio::RawSampleBuffer;
+    using RawSampleBuffer = phu::audio::RawSampleBuffer<>;
     using phu::audio::BucketSet;
 
     RawSampleBuffer buf;
@@ -464,7 +464,7 @@ void test_integration_write_and_mark_dirty() {
 }
 
 void test_integration_resize_then_recompute() {
-    using phu::audio::RawSampleBuffer;
+    using RawSampleBuffer = phu::audio::RawSampleBuffer<>;
     using phu::audio::BucketSet;
 
     RawSampleBuffer buf;
