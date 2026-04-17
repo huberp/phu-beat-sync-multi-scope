@@ -20,14 +20,36 @@
  *
  * As the sole juce::OpenGLRenderer registered on the context, this class
  * drives the GL lifecycle callbacks and delegates all actual drawing to the
- * sub-renderers.  Each sub-renderer owns its shader, VBOs, and snapshot.
+ * sub-renderers. Each sub-renderer owns its shader, VBOs, and snapshot.
+ *
+ * Architecture & Code Reuse:
+ *   All sub-renderers benefit from lib/gl utility classes:
+ *
+ *   - **GLSnapshotRenderer<T>** — Template base for double-buffered snapshots.
+ *     Provides thread-safe data hand-off: UI thread calls setSnapshot(), GL thread
+ *     calls swapSnapshot() to atomically acquire the latest data. Eliminates ~40 lines
+ *     of boilerplate per renderer (SpinLock + pending/render fields).
+ *
+ *   - **GLSLShaderBuilder** — Static utility for GLSL version detection, shader
+ *     assembly, and compilation with standard error handling. Centralizes the
+ *     repeated pattern of version checking, fragment shader assembly for
+ *     compatibility, and compile error reporting.
+ *
+ *   - **GLRendererBase** — Abstract base for renderer lifecycle. Provides create()
+ *     and release() contract, compileShader() helper, and isReady() checks.
+ *     Ensures consistent initialization order and resource cleanup.
  *
  * Thread safety:
- *   - setWaveformData / setGridPlayheadData / setRmsData are called from
- *     the UI thread.  Each forwards to the corresponding sub-renderer's
- *     setData() method which is internally guarded by a SpinLock.
- *   - newOpenGLContextCreated / renderOpenGL / openGLContextClosing are
- *     called from the GL thread.
+ *   - setWaveformData / setGridPlayheadData / setRmsData / setCancellationData
+ *     are called from the UI thread. Each forwards to the corresponding
+ *     sub-renderer's setData() method which is internally guarded by a SpinLock
+ *     (see GLSnapshotRenderer<T>::setSnapshot()).
+ *   - newOpenGLContextCreated / renderOpenGL / openGLContextClosing are called
+ *     from the GL thread (see GLSnapshotRenderer<T>::swapSnapshot()).
+ *
+ * @see lib/gl/GLSnapshotRenderer.h
+ * @see lib/gl/GLSLShaderBuilder.h
+ * @see lib/gl/GLRendererBase.h
  */
 class ScopeGLCoordinator : public juce::OpenGLRenderer {
   public:

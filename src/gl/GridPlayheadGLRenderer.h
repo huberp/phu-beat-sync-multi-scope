@@ -3,6 +3,16 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_opengl/juce_opengl.h>
 #include <vector>
+#include <gl/GLRendererBase.h>
+#include <gl/GLSnapshotRenderer.h>
+
+namespace gl_detail {
+struct GridPlayheadSnapshot {
+  double displayRangeBeats = 4.0;
+  double currentPpq        = 0.0;
+  bool   broadcastOnly     = false;
+};
+}
 
 /**
  * GridPlayheadGLRenderer — self-contained GPU renderer for the amplitude grid
@@ -18,7 +28,8 @@
  *   - draw()    is called from the GL thread.
  *   - A SpinLock protects the pending → render snapshot swap.
  */
-class GridPlayheadGLRenderer {
+class GridPlayheadGLRenderer : public GLRendererBase,
+                               protected GLSnapshotRenderer<gl_detail::GridPlayheadSnapshot> {
   public:
     GridPlayheadGLRenderer() { m_gridStaging.reserve(128); }
     ~GridPlayheadGLRenderer() { release(); }
@@ -36,9 +47,6 @@ class GridPlayheadGLRenderer {
 
     /** Release all GL resources. Must be called on the GL thread. */
     void release();
-
-    /** Returns true once create() has succeeded and release() has not been called. */
-    bool isReady() const { return m_shader != nullptr; }
 
     // -------------------------------------------------------------------------
     // Data upload (UI thread)
@@ -62,9 +70,8 @@ class GridPlayheadGLRenderer {
     void draw();
 
   private:
-    juce::OpenGLContext* m_ctx = nullptr;
+    using Snapshot = gl_detail::GridPlayheadSnapshot;
 
-    std::unique_ptr<juce::OpenGLShaderProgram> m_shader;
     GLint  m_aPositionLoc = -1;  ///< attribute: vec2 aPosition
     GLint  m_uColourLoc   = -1;  ///< uniform:   vec4 uColour
 
@@ -75,18 +82,6 @@ class GridPlayheadGLRenderer {
     int    m_gridVertexCount    = 0;
     double m_lastGridRangeBeats = -1.0;
     std::vector<float> m_gridStaging;  ///< Reusable staging buffer (avoids per-frame allocation)
-
-    // Double-buffered snapshot (UI thread writes pending, GL thread reads render)
-    struct Snapshot {
-        double displayRangeBeats = 4.0;
-        double currentPpq        = 0.0;
-        bool   broadcastOnly     = false;
-    };
-
-    juce::SpinLock m_lock;
-    Snapshot       m_pending;
-    Snapshot       m_render;
-    bool           m_newData = false;
 
     void drawGrid();
     void drawPlayhead();

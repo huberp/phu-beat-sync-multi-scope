@@ -9,25 +9,8 @@ using namespace juce::gl;
 bool RmsOverlayRenderer::create(juce::OpenGLContext& ctx) {
     m_ctx = &ctx;
 
-    // gl_VertexID requires GLSL 1.30+ (OpenGL 3.0)
-    const double glslVersion = juce::OpenGLShaderProgram::getLanguageVersion();
-    if (glslVersion < 1.30) {
-        DBG("RmsOverlayRenderer: GLSL " + juce::String(glslVersion)
-            + " too old (need 1.30+ for gl_VertexID)");
+    if (!GLSLShaderBuilder::validateGLSLVersion("RmsOverlayRenderer")) {
         return false;
-    }
-
-    // Select GLSL version directive (macOS Core Profile requires >= 150)
-    juce::String versionLine;
-    bool         useModernOutput = false;
-
-    if (glslVersion >= 3.30) {
-        versionLine     = "#version 330\n";
-        useModernOutput = true;
-    } else if (glslVersion >= 1.50) {
-        versionLine = "#version 150\n";
-    } else {
-        versionLine = "#version 130\n";
     }
 
     // ---- Vertex shader -------------------------------------------------------
@@ -40,7 +23,7 @@ bool RmsOverlayRenderer::create(juce::OpenGLContext& ctx) {
     // X: bar left/right edges are evenly spaced over clip-space [-1, 1].
     // Y: centred on clamp(rmsValue * ampScale, -1, 1); half-height set per draw.
     // -------------------------------------------------------------------------
-    const juce::String vertSrc = versionLine + R"(
+    const juce::String vertSrc = GLSLShaderBuilder::getVersionDirective() + R"(
         uniform float uRmsValues[128];
         uniform float uBarBoundaries[129];
         uniform int   uNumBars;
@@ -70,30 +53,11 @@ bool RmsOverlayRenderer::create(juce::OpenGLContext& ctx) {
         }
     )";
 
-    // ---- Fragment shader (flat colour) --------------------------------------
-    const juce::String fragSrc = versionLine
-        + (useModernOutput ? "out vec4 fragColor;\n" : "")
-        + R"(
-        uniform vec4 uColour;
-        void main() {
-        )" + (useModernOutput ? "    fragColor = uColour;\n" : "    gl_FragColor = uColour;\n")
-        + "}\n";
+    const juce::String fragSrc = GLSLShaderBuilder::buildFragmentShader(
+        "uniform vec4 uColour;\n",
+        "    fragColor = uColour;\n");
 
-    m_shader = std::make_unique<juce::OpenGLShaderProgram>(ctx);
-
-    if (!m_shader->addVertexShader(vertSrc)) {
-        DBG("RmsOverlayRenderer: vertex shader failed: " + m_shader->getLastError());
-        m_shader.reset();
-        return false;
-    }
-    if (!m_shader->addFragmentShader(fragSrc)) {
-        DBG("RmsOverlayRenderer: fragment shader failed: " + m_shader->getLastError());
-        m_shader.reset();
-        return false;
-    }
-    if (!m_shader->link()) {
-        DBG("RmsOverlayRenderer: shader link failed: " + m_shader->getLastError());
-        m_shader.reset();
+    if (!compileShader(vertSrc, fragSrc, "RmsOverlayRenderer")) {
         return false;
     }
 
@@ -110,14 +74,14 @@ bool RmsOverlayRenderer::create(juce::OpenGLContext& ctx) {
 }
 
 void RmsOverlayRenderer::release() {
-    m_shader.reset();
     m_uRmsValuesLoc     = -1;
     m_uBarBoundariesLoc = -1;
     m_uNumBarsLoc       = -1;
     m_uAmpScaleLoc      = -1;
     m_uHalfHLoc         = -1;
     m_uColourLoc        = -1;
-    m_ctx               = nullptr;
+    clearPendingSnapshot();
+    GLRendererBase::release();
 }
 
 // ============================================================================
@@ -127,28 +91,28 @@ void RmsOverlayRenderer::release() {
 void RmsOverlayRenderer::setData(const float* values, int numBars,
                                   float ampScale, bool show,
                                   const float* barBoundaries) {
-    const juce::SpinLock::ScopedLockType lock(m_lock);
-    m_pending.show     = show;
-    m_pending.ampScale = ampScale;
-    m_pending.numBars  = 0;
+    Snapshot snapshot;
+    snapshot.show     = show;
+    snapshot.ampScale = ampScale;
+    snapshot.numBars  = 0;
 
     if (show && values != nullptr && numBars > 0) {
         const int bars = juce::jmin(numBars, MAX_RMS_BARS);
-        std::memcpy(m_pending.rmsValues, values, static_cast<size_t>(bars) * sizeof(float));
-        m_pending.numBars = bars;
+        std::memcpy(snapshot.rmsValues, values, static_cast<size_t>(bars) * sizeof(float));
+        snapshot.numBars = bars;
 
         if (barBoundaries != nullptr) {
             // numBars+1 boundary values (left edges of each bar + trailing 1.0)
-            std::memcpy(m_pending.barBoundaries, barBoundaries,
+            std::memcpy(snapshot.barBoundaries, barBoundaries,
                         static_cast<size_t>(bars + 1) * sizeof(float));
         } else {
             // Fallback: evenly-spaced boundaries
             for (int i = 0; i <= bars; ++i)
-                m_pending.barBoundaries[i] = static_cast<float>(i) / static_cast<float>(bars);
+                snapshot.barBoundaries[i] = static_cast<float>(i) / static_cast<float>(bars);
         }
     }
 
-    m_newData = true;
+    setSnapshot(snapshot);
 }
 
 // ============================================================================
@@ -156,16 +120,9 @@ void RmsOverlayRenderer::setData(const float* values, int numBars,
 // ============================================================================
 
 void RmsOverlayRenderer::draw(int vpHeightPx) {
-    if (!m_shader) return;
+    if (!isReady()) return;
 
-    // Swap in the latest snapshot
-    {
-        const juce::SpinLock::ScopedLockType lock(m_lock);
-        if (m_newData) {
-            m_render  = m_pending;
-            m_newData = false;
-        }
-    }
+    swapSnapshot();
 
     if (!m_render.show || m_render.numBars <= 0 || vpHeightPx <= 0)
         return;

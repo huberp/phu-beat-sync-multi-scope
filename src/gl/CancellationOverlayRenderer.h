@@ -1,6 +1,16 @@
 ﻿#pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_opengl/juce_opengl.h>
+#include <gl/GLRendererBase.h>
+#include <gl/GLSnapshotRenderer.h>
+
+namespace gl_detail {
+struct CancellationOverlaySnapshot {
+  float cancelValues[256] {};
+  int   numSlots = 0;
+  bool  show     = false;
+};
+}
 
 /**
  * CancellationOverlayRenderer — OpenGL renderer for the inter-instance
@@ -19,7 +29,8 @@
  *   - draw()     is called from the GL thread.
  *   - A SpinLock protects the pending -> render snapshot swap.
  */
-class CancellationOverlayRenderer {
+class CancellationOverlayRenderer : public GLRendererBase,
+                                    protected GLSnapshotRenderer<gl_detail::CancellationOverlaySnapshot> {
   public:
     /** Maximum number of cancellation slots (matches ScopeDisplay::MAX_CANCEL_SLOTS). */
     static constexpr int MAX_CANCEL_SLOTS = 256;
@@ -40,9 +51,6 @@ class CancellationOverlayRenderer {
 
     /** Release all GL resources. Must be called on the GL thread. */
     void release();
-
-    /** Returns true once create() has succeeded and release() has not been called. */
-    bool isReady() const { return m_shader != nullptr; }
 
     // -------------------------------------------------------------------------
     // Data upload (UI thread)
@@ -73,24 +81,11 @@ class CancellationOverlayRenderer {
     void draw(int vpHeightPx);
 
   private:
-    juce::OpenGLContext* m_ctx = nullptr;
-
-    std::unique_ptr<juce::OpenGLShaderProgram> m_shader;
+    using Snapshot = gl_detail::CancellationOverlaySnapshot;
 
     GLint m_uCancelValuesLoc = -1;  // float uCancelValues[256]
     GLint m_uNumSlotsLoc     = -1;  // int   uNumSlots
     GLint m_uBarTopNDCLoc    = -1;  // float uBarTopNDC
-
-    struct Snapshot {
-        float cancelValues[MAX_CANCEL_SLOTS] {};
-        int   numSlots = 0;
-        bool  show     = false;
-    };
-
-    juce::SpinLock m_lock;
-    Snapshot       m_pending;
-    Snapshot       m_render;
-    bool           m_newData = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(CancellationOverlayRenderer)
 };

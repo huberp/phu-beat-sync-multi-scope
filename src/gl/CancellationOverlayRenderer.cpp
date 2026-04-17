@@ -7,23 +7,15 @@ bool CancellationOverlayRenderer::create(juce::OpenGLContext& ctx)
 {
     m_ctx = &ctx;
 
-    const double glslVersion = juce::OpenGLShaderProgram::getLanguageVersion();
-    if (glslVersion < 1.30)
+    if (!GLSLShaderBuilder::validateGLSLVersion("CancellationOverlayRenderer"))
     {
-        DBG("CancellationOverlayRenderer: GLSL " + juce::String(glslVersion) + " too old");
         return false;
     }
-
-    juce::String versionLine;
-    bool useModernOutput = false;
-    if      (glslVersion >= 3.30) { versionLine = "#version 330\n"; useModernOutput = true; }
-    else if (glslVersion >= 1.50) { versionLine = "#version 150\n"; }
-    else                          { versionLine = "#version 130\n"; }
 
     // -------------------------------------------------------------------------
     // Vertex shader — geometry built from gl_VertexID; no VBO required.
     // -------------------------------------------------------------------------
-    const juce::String vertSrc = versionLine + R"(
+    const juce::String vertSrc = GLSLShaderBuilder::getVersionDirective() + R"(
         uniform float uCancelValues[256];
         uniform int   uNumSlots;
         uniform float uBarTopNDC;
@@ -63,32 +55,12 @@ bool CancellationOverlayRenderer::create(juce::OpenGLContext& ctx)
     // -------------------------------------------------------------------------
     // Fragment shader — output colour passed from vertex stage.
     // -------------------------------------------------------------------------
-    const juce::String fragSrc = versionLine
-        + (useModernOutput ? "out vec4 fragColor;\n" : "")
-        + "in vec3 vColour;\n"
-        + "void main() {\n"
-        + (useModernOutput ? "    fragColor    = vec4(vColour, 0.85);\n"
-                           : "    gl_FragColor = vec4(vColour, 0.85);\n")
-        + "}\n";
+    const juce::String fragSrc = GLSLShaderBuilder::buildFragmentShader(
+        "in vec3 vColour;\n",
+        "    fragColor = vec4(vColour, 0.85);\n");
 
-    m_shader = std::make_unique<juce::OpenGLShaderProgram>(ctx);
-
-    if (!m_shader->addVertexShader(vertSrc))
+    if (!compileShader(vertSrc, fragSrc, "CancellationOverlayRenderer"))
     {
-        DBG("CancellationOverlayRenderer: vertex shader error: " + m_shader->getLastError());
-        m_shader.reset();
-        return false;
-    }
-    if (!m_shader->addFragmentShader(fragSrc))
-    {
-        DBG("CancellationOverlayRenderer: fragment shader error: " + m_shader->getLastError());
-        m_shader.reset();
-        return false;
-    }
-    if (!m_shader->link())
-    {
-        DBG("CancellationOverlayRenderer: link error: " + m_shader->getLastError());
-        m_shader.reset();
         return false;
     }
 
@@ -103,38 +75,35 @@ bool CancellationOverlayRenderer::create(juce::OpenGLContext& ctx)
 // =============================================================================
 void CancellationOverlayRenderer::release()
 {
-    m_shader.reset();
     m_uCancelValuesLoc = m_uNumSlotsLoc = m_uBarTopNDCLoc = -1;
-    m_ctx = nullptr;
+    clearPendingSnapshot();
+    GLRendererBase::release();
 }
 
 // =============================================================================
 void CancellationOverlayRenderer::setData(const float* values, int numSlots, bool show)
 {
-    const juce::SpinLock::ScopedLockType lock(m_lock);
+    Snapshot snapshot;
 
-    m_pending.show     = show;
-    m_pending.numSlots = 0;
+    snapshot.show     = show;
+    snapshot.numSlots = 0;
 
     if (show && values != nullptr && numSlots > 0)
     {
         const int n = juce::jmin(numSlots, MAX_CANCEL_SLOTS);
-        std::memcpy(m_pending.cancelValues, values, static_cast<size_t>(n) * sizeof(float));
-        m_pending.numSlots = n;
+        std::memcpy(snapshot.cancelValues, values, static_cast<size_t>(n) * sizeof(float));
+        snapshot.numSlots = n;
     }
 
-    m_newData = true;
+    setSnapshot(snapshot);
 }
 
 // =============================================================================
 void CancellationOverlayRenderer::draw(int vpHeightPx)
 {
-    if (!m_shader) return;
+    if (!isReady()) return;
 
-    {
-        const juce::SpinLock::ScopedLockType lock(m_lock);
-        if (m_newData) { m_render = m_pending; m_newData = false; }
-    }
+    swapSnapshot();
 
     if (!m_render.show || m_render.numSlots <= 0 || vpHeightPx <= 0) return;
 

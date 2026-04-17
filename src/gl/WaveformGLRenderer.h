@@ -3,6 +3,25 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_opengl/juce_opengl.h>
 #include <array>
+#include <gl/GLRendererBase.h>
+#include <gl/GLSnapshotRenderer.h>
+
+namespace gl_detail {
+struct WaveformSnapshot {
+  struct Inst {
+    bool  active  = false;
+    bool  isLocal = false;
+    float r = 0.0f, g = 0.0f, b = 0.0f, a = 1.0f;
+    float bins[4096] {};
+  };
+  std::array<Inst, 8> instances;
+  float ampScale       = 1.0f;
+  bool  showLocal      = true;
+  bool  showRemote     = true;
+  bool  broadcastOnly  = false;
+  int   localSlotIndex = 0;
+};
+}
 
 /**
  * WaveformGLRenderer — self-contained GPU waveform line renderer.
@@ -18,7 +37,8 @@
  *   - draw()    is called from the GL thread.
  *   - A SpinLock protects the pending → render snapshot swap.
  */
-class WaveformGLRenderer {
+class WaveformGLRenderer : public GLRendererBase,
+                           protected GLSnapshotRenderer<gl_detail::WaveformSnapshot> {
   public:
     static constexpr int MAX_INSTANCES = 8;
     static constexpr int DISPLAY_BINS  = 4096;
@@ -49,9 +69,6 @@ class WaveformGLRenderer {
     /** Release all GL resources. Must be called on the GL thread. */
     void release();
 
-    /** Returns true once create() has succeeded and release() has not been called. */
-    bool isReady() const { return m_shader != nullptr; }
-
     // -------------------------------------------------------------------------
     // Data upload (UI thread)
     // -------------------------------------------------------------------------
@@ -79,9 +96,8 @@ class WaveformGLRenderer {
     void draw();
 
   private:
-    juce::OpenGLContext* m_ctx = nullptr;
+    using Snapshot = gl_detail::WaveformSnapshot;
 
-    std::unique_ptr<juce::OpenGLShaderProgram> m_shader;
     GLint  m_aYValueLoc   = -1;  ///< attribute: float yValue
     GLint  m_uColourLoc   = -1;  ///< uniform:   vec4  uColour
     GLint  m_uNumBinsLoc  = -1;  ///< uniform:   int   uNumBins
@@ -89,27 +105,6 @@ class WaveformGLRenderer {
 
     GLuint m_vbos[MAX_INSTANCES] {};
     bool   m_vbosCreated = false;
-
-    // Double-buffered snapshot (UI thread writes pending, GL thread reads render)
-    struct Snapshot {
-        struct Inst {
-            bool  active  = false;
-            bool  isLocal = false;
-            float r = 0.0f, g = 0.0f, b = 0.0f, a = 1.0f;
-            float bins[DISPLAY_BINS] {};
-        };
-        std::array<Inst, MAX_INSTANCES> instances;
-        float ampScale       = 1.0f;
-        bool  showLocal      = true;
-        bool  showRemote     = true;
-        bool  broadcastOnly  = false;
-        int   localSlotIndex = 0;
-    };
-
-    juce::SpinLock m_lock;
-    Snapshot       m_pending;
-    Snapshot       m_render;
-    bool           m_newData = false;
 
     void createVBOs();
     void deleteVBOs();

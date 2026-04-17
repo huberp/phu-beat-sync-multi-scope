@@ -9,54 +9,23 @@ using namespace juce::gl;
 bool GridPlayheadGLRenderer::create(juce::OpenGLContext& ctx) {
     m_ctx = &ctx;
 
-    const double glslVersion = juce::OpenGLShaderProgram::getLanguageVersion();
-    if (glslVersion < 1.30) {
-        DBG("GridPlayheadGLRenderer: GLSL " + juce::String(glslVersion)
-            + " too old (need 1.30+)");
+    if (!GLSLShaderBuilder::validateGLSLVersion("GridPlayheadGLRenderer")) {
         return false;
     }
 
-    // Select GLSL version directive
-    juce::String versionLine;
-    bool         useModernOutput = false;
-
-    if (glslVersion >= 3.30)      { versionLine = "#version 330\n"; useModernOutput = true; }
-    else if (glslVersion >= 1.50) { versionLine = "#version 150\n"; }
-    else                          { versionLine = "#version 130\n"; }
-
     // ---- Vertex shader: vec2 pass-through ----
-    const juce::String vertSrc = versionLine + R"(
+    const juce::String vertSrc = GLSLShaderBuilder::getVersionDirective() + R"(
         in vec2 aPosition;
         void main() {
             gl_Position = vec4(aPosition, 0.0, 1.0);
         }
     )";
 
-    // ---- Fragment shader: flat colour ----
-    const juce::String fragSrc = versionLine
-        + (useModernOutput ? "out vec4 fragColor;\n" : "")
-        + R"(
-        uniform vec4 uColour;
-        void main() {
-        )"
-        + (useModernOutput ? "    fragColor = uColour;\n" : "    gl_FragColor = uColour;\n")
-        + "}\n";
+    const juce::String fragSrc = GLSLShaderBuilder::buildFragmentShader(
+        "uniform vec4 uColour;\n",
+        "    fragColor = uColour;\n");
 
-    m_shader = std::make_unique<juce::OpenGLShaderProgram>(ctx);
-
-    if (!m_shader->addVertexShader(vertSrc)) {
-        DBG("GridPlayheadGLRenderer: vertex shader failed: " + m_shader->getLastError());
-        m_shader.reset();
-        return false;
-    }
-    if (!m_shader->addFragmentShader(fragSrc)) {
-        DBG("GridPlayheadGLRenderer: fragment shader failed: " + m_shader->getLastError());
-        m_shader.reset();
-        return false;
-    }
-    if (!m_shader->link()) {
-        DBG("GridPlayheadGLRenderer: shader link failed: " + m_shader->getLastError());
-        m_shader.reset();
+    if (!compileShader(vertSrc, fragSrc, "GridPlayheadGLRenderer")) {
         return false;
     }
 
@@ -83,11 +52,11 @@ void GridPlayheadGLRenderer::release() {
         if (m_playheadVbo != 0) { m_ctx->extensions.glDeleteBuffers(1, &m_playheadVbo); m_playheadVbo = 0; }
     }
 
-    m_shader.reset();
     m_aPositionLoc = m_uColourLoc = -1;
     m_lastGridRangeBeats = -1.0;
     m_gridVertexCount    = 0;
-    m_ctx = nullptr;
+    clearPendingSnapshot();
+    GLRendererBase::release();
 }
 
 // ============================================================================
@@ -97,11 +66,11 @@ void GridPlayheadGLRenderer::release() {
 void GridPlayheadGLRenderer::setData(double displayRangeBeats,
                                       double currentPpq,
                                       bool   broadcastOnly) {
-    const juce::SpinLock::ScopedLockType lock(m_lock);
-    m_pending.displayRangeBeats = displayRangeBeats;
-    m_pending.currentPpq        = currentPpq;
-    m_pending.broadcastOnly     = broadcastOnly;
-    m_newData = true;
+    Snapshot snapshot;
+    snapshot.displayRangeBeats = displayRangeBeats;
+    snapshot.currentPpq        = currentPpq;
+    snapshot.broadcastOnly     = broadcastOnly;
+    setSnapshot(snapshot);
 }
 
 // ============================================================================
@@ -109,16 +78,9 @@ void GridPlayheadGLRenderer::setData(double displayRangeBeats,
 // ============================================================================
 
 void GridPlayheadGLRenderer::draw() {
-    if (!m_shader) return;
+    if (!isReady()) return;
 
-    // Swap in the latest snapshot
-    {
-        const juce::SpinLock::ScopedLockType lock(m_lock);
-        if (m_newData) {
-            m_render  = m_pending;
-            m_newData = false;
-        }
-    }
+    swapSnapshot();
 
     m_shader->use();
     drawGrid();

@@ -9,24 +9,12 @@ using namespace juce::gl;
 bool WaveformGLRenderer::create(juce::OpenGLContext& ctx) {
     m_ctx = &ctx;
 
-    // gl_VertexID requires GLSL 1.30+ (OpenGL 3.0)
-    const double glslVersion = juce::OpenGLShaderProgram::getLanguageVersion();
-    if (glslVersion < 1.30) {
-        DBG("WaveformGLRenderer: GLSL " + juce::String(glslVersion)
-            + " too old (need 1.30+ for gl_VertexID)");
+    if (!GLSLShaderBuilder::validateGLSLVersion("WaveformGLRenderer")) {
         return false;
     }
 
-    // Select GLSL version directive
-    juce::String versionLine;
-    bool         useModernOutput = false;
-
-    if (glslVersion >= 3.30)      { versionLine = "#version 330\n"; useModernOutput = true; }
-    else if (glslVersion >= 1.50) { versionLine = "#version 150\n"; }
-    else                          { versionLine = "#version 130\n"; }
-
     // ---- Vertex shader: Y-only input, X computed from gl_VertexID ----
-    const juce::String vertSrc = versionLine + R"(
+    const juce::String vertSrc = GLSLShaderBuilder::getVersionDirective() + R"(
         in float yValue;
         uniform int   uNumBins;
         uniform float uAmpScale;
@@ -37,31 +25,11 @@ bool WaveformGLRenderer::create(juce::OpenGLContext& ctx) {
         }
     )";
 
-    // ---- Fragment shader: flat colour ----
-    const juce::String fragSrc = versionLine
-        + (useModernOutput ? "out vec4 fragColor;\n" : "")
-        + R"(
-        uniform vec4 uColour;
-        void main() {
-        )"
-        + (useModernOutput ? "    fragColor = uColour;\n" : "    gl_FragColor = uColour;\n")
-        + "}\n";
+    const juce::String fragSrc = GLSLShaderBuilder::buildFragmentShader(
+        "uniform vec4 uColour;\n",
+        "    fragColor = uColour;\n");
 
-    m_shader = std::make_unique<juce::OpenGLShaderProgram>(ctx);
-
-    if (!m_shader->addVertexShader(vertSrc)) {
-        DBG("WaveformGLRenderer: vertex shader failed: " + m_shader->getLastError());
-        m_shader.reset();
-        return false;
-    }
-    if (!m_shader->addFragmentShader(fragSrc)) {
-        DBG("WaveformGLRenderer: fragment shader failed: " + m_shader->getLastError());
-        m_shader.reset();
-        return false;
-    }
-    if (!m_shader->link()) {
-        DBG("WaveformGLRenderer: shader link failed: " + m_shader->getLastError());
-        m_shader.reset();
+    if (!compileShader(vertSrc, fragSrc, "WaveformGLRenderer")) {
         return false;
     }
 
@@ -76,9 +44,9 @@ bool WaveformGLRenderer::create(juce::OpenGLContext& ctx) {
 
 void WaveformGLRenderer::release() {
     deleteVBOs();
-    m_shader.reset();
     m_aYValueLoc = m_uColourLoc = m_uNumBinsLoc = m_uAmpScaleLoc = -1;
-    m_ctx = nullptr;
+    clearPendingSnapshot();
+    GLRendererBase::release();
 }
 
 // ============================================================================
@@ -91,11 +59,11 @@ void WaveformGLRenderer::setData(const std::array<InstanceData, MAX_INSTANCES>& 
                                   bool  showRemote,
                                   bool  broadcastOnly,
                                   int   localSlotIndex) {
-    const juce::SpinLock::ScopedLockType lock(m_lock);
+    Snapshot snapshot;
 
     for (int i = 0; i < MAX_INSTANCES; ++i) {
         const auto& src = instances[static_cast<size_t>(i)];
-        auto& dst = m_pending.instances[static_cast<size_t>(i)];
+        auto& dst = snapshot.instances[static_cast<size_t>(i)];
 
         dst.active  = src.active;
         dst.isLocal = src.isLocal;
@@ -108,12 +76,12 @@ void WaveformGLRenderer::setData(const std::array<InstanceData, MAX_INSTANCES>& 
             std::memcpy(dst.bins, src.bins, sizeof(float) * DISPLAY_BINS);
     }
 
-    m_pending.ampScale       = ampScale;
-    m_pending.showLocal      = showLocal;
-    m_pending.showRemote     = showRemote;
-    m_pending.broadcastOnly  = broadcastOnly;
-    m_pending.localSlotIndex = localSlotIndex;
-    m_newData = true;
+    snapshot.ampScale       = ampScale;
+    snapshot.showLocal      = showLocal;
+    snapshot.showRemote     = showRemote;
+    snapshot.broadcastOnly  = broadcastOnly;
+    snapshot.localSlotIndex = localSlotIndex;
+    setSnapshot(std::move(snapshot));
 }
 
 // ============================================================================
@@ -121,16 +89,9 @@ void WaveformGLRenderer::setData(const std::array<InstanceData, MAX_INSTANCES>& 
 // ============================================================================
 
 void WaveformGLRenderer::draw() {
-    if (!m_shader) return;
+    if (!isReady()) return;
 
-    // Swap in the latest snapshot
-    {
-        const juce::SpinLock::ScopedLockType lock(m_lock);
-        if (m_newData) {
-            m_render  = m_pending;
-            m_newData = false;
-        }
-    }
+    swapSnapshot();
 
     m_shader->use();
     const int localSlot = m_render.localSlotIndex;
