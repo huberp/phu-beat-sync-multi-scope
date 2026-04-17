@@ -586,7 +586,7 @@ void ScopeDisplay::paint(juce::Graphics& g) {
                       static_cast<int>(bounds.getY()));
     }
 
-    if (m_showCancellation && hasActiveRemotes) {
+    if (m_showCancellation && hasActiveRemotes && !glActive) {
         if (m_cancelOverlayDirty) {
             m_cancelOverlayImage = juce::Image(
                 juce::Image::ARGB, juce::jmax(1, w), juce::jmax(1, h), true);
@@ -901,7 +901,36 @@ void ScopeDisplay::updateGLFrameData() {
     for (int i = 0; i < MAX_INSTANCES; ++i)
         if (i != localSlot && m_instances[i].active) { hasRemotes = true; break; }
     const float* rmsData = (m_showRemote && hasRemotes) ? m_rmsSum : m_rmsLocal;
-    m_glCoordinator->setRmsData(rmsData, m_numActiveRmsBuckets, m_amplitudeScale, m_showRms);
+
+    // Build exact bucket-boundary positions (normalised [0,1]) so the GL renderer
+    // aligns bars to beat-grid lines the same way the CPU renderer does.
+    // barBoundaries[i] = bucket(i).startIdx / N  for i in [0, numBars)
+    // barBoundaries[numBars] = 1.0  (right edge of last bar)
+    float barBoundaries[MAX_METRIC_SLOTS + 1] {};
+    const float* barBoundariesPtr = nullptr;
+    if (m_numActiveRmsBuckets > 0) {
+        const InstanceSlot* refInst = nullptr;
+        for (const auto& inst : m_instances)
+            if (inst.active && inst.rmsBuckets.bucketCount() > 0) { refInst = &inst; break; }
+        const int N = refInst ? refInst->buffer.size() : 0;
+        if (refInst && N > 0) {
+            const int nb = juce::jmin(m_numActiveRmsBuckets, MAX_METRIC_SLOTS);
+            for (int i = 0; i < nb; ++i)
+                barBoundaries[i] = static_cast<float>(refInst->rmsBuckets.bucket(i).startIdx)
+                                   / static_cast<float>(N);
+            barBoundaries[nb] = 1.0f;
+            barBoundariesPtr = barBoundaries;
+        }
+    }
+
+    m_glCoordinator->setRmsData(rmsData, m_numActiveRmsBuckets, m_amplitudeScale, m_showRms,
+                                 barBoundariesPtr);
+
+    // Cancellation overlay — pass active-remotes condition to avoid drawing when no remotes
+    m_glCoordinator->setCancellationData(
+        m_cancellationIndex,
+        m_numActiveCancelBuckets,
+        m_showCancellation && hasRemotes);
 }
 
 float ScopeDisplay::sampleToY(float sample, float top, float height) const {

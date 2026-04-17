@@ -56,12 +56,16 @@ class RmsOverlayRenderer {
      * Snapshot the current RMS data for the next GL frame.
      * Must be called from the UI thread.
      *
-     * @param values    Linear-amplitude RMS per bar slot, range [0, 1+].
-     * @param numBars   Number of valid entries in values[]; clamped to MAX_RMS_BARS.
-     * @param ampScale  Same amplitude scale applied to waveforms.
-     * @param show      Whether the overlay should be visible.
+     * @param values          Linear-amplitude RMS per bar slot, range [0, 1+].
+     * @param numBars         Number of valid entries in values[]; clamped to MAX_RMS_BARS.
+     * @param ampScale        Same amplitude scale applied to waveforms.
+     * @param show            Whether the overlay should be visible.
+     * @param barBoundaries   Normalised [0,1] left-edge of each bar plus a trailing 1.0,
+     *                        giving numBars+1 entries.  When nullptr the renderer falls back
+     *                        to evenly-spaced positions.
      */
-    void setData(const float* values, int numBars, float ampScale, bool show);
+    void setData(const float* values, int numBars, float ampScale, bool show,
+                 const float* barBoundaries = nullptr);
 
     // -------------------------------------------------------------------------
     // Drawing (GL thread)
@@ -83,15 +87,17 @@ class RmsOverlayRenderer {
     std::unique_ptr<juce::OpenGLShaderProgram> m_shader;
 
     // Cached uniform locations
-    GLint m_uRmsValuesLoc = -1;   // uniform float uRmsValues[MAX_RMS_BARS]
-    GLint m_uNumBarsLoc   = -1;   // uniform int   uNumBars
-    GLint m_uAmpScaleLoc  = -1;   // uniform float uAmpScale
-    GLint m_uHalfHLoc     = -1;   // uniform float uHalfH   (NDC half-height for current layer)
-    GLint m_uColourLoc    = -1;   // uniform vec4  uColour
+    GLint m_uRmsValuesLoc      = -1;   // uniform float uRmsValues[MAX_RMS_BARS]
+    GLint m_uBarBoundariesLoc  = -1;   // uniform float uBarBoundaries[MAX_RMS_BARS+1]
+    GLint m_uNumBarsLoc        = -1;   // uniform int   uNumBars
+    GLint m_uAmpScaleLoc       = -1;   // uniform float uAmpScale
+    GLint m_uHalfHLoc          = -1;   // uniform float uHalfH   (NDC half-height for current layer)
+    GLint m_uColourLoc         = -1;   // uniform vec4  uColour
 
     // Double-buffered snapshot (UI thread writes pending, GL thread reads render)
     struct Snapshot {
-        float rmsValues[MAX_RMS_BARS] {};
+        float rmsValues[MAX_RMS_BARS]       {};
+        float barBoundaries[MAX_RMS_BARS + 1] {}; ///< normalised [0,1] bar left-edges + trailing 1.0
         int   numBars  = 0;
         float ampScale = 1.0f;
         bool  show     = false;

@@ -56,8 +56,13 @@ void ScopeGLCoordinator::setGridPlayheadData(double displayRangeBeats,
 }
 
 void ScopeGLCoordinator::setRmsData(const float* values, int numBars,
-                                     float ampScale, bool show) {
-    m_rms.setData(values, numBars, ampScale, show);
+                                     float ampScale, bool show,
+                                     const float* barBoundaries) {
+    m_rms.setData(values, numBars, ampScale, show, barBoundaries);
+}
+
+void ScopeGLCoordinator::setCancellationData(const float* values, int numSlots, bool show) {
+    m_cancellation.setData(values, numSlots, show);
 }
 
 // ============================================================================
@@ -76,8 +81,9 @@ void ScopeGLCoordinator::newOpenGLContextCreated() {
         return;
     }
 
-    // RMS overlay is non-fatal: if its shader fails the waveform still works
+    // RMS and cancellation overlays are non-fatal: if their shaders fail the waveform still works
     m_rms.create(m_glContext);
+    m_cancellation.create(m_glContext);
 
     m_available.store(true, std::memory_order_release);
 }
@@ -90,6 +96,7 @@ void ScopeGLCoordinator::openGLContextClosing() {
     m_waveform.release();
     m_gridPlayhead.release();
     m_rms.release();
+    m_cancellation.release();
     m_available.store(false, std::memory_order_release);
 }
 
@@ -118,9 +125,10 @@ void ScopeGLCoordinator::renderOpenGL() {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    m_gridPlayhead.draw();  // Grid + playhead (back)
-    m_waveform.draw();      // Waveform lines
-    m_rms.draw(h);          // RMS overlay (front)
+    m_gridPlayhead.draw();   // Grid + playhead (back)
+    m_waveform.draw();       // Waveform lines
+    m_rms.draw(h);           // RMS overlay
+    m_cancellation.draw(h);  // Cancellation bar overlay (front)
 
     glDisable(GL_BLEND);
 }

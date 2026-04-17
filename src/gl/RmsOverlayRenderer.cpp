@@ -42,6 +42,7 @@ bool RmsOverlayRenderer::create(juce::OpenGLContext& ctx) {
     // -------------------------------------------------------------------------
     const juce::String vertSrc = versionLine + R"(
         uniform float uRmsValues[128];
+        uniform float uBarBoundaries[129];
         uniform int   uNumBars;
         uniform float uAmpScale;
         uniform float uHalfH;
@@ -53,9 +54,13 @@ bool RmsOverlayRenderer::create(juce::OpenGLContext& ctx) {
             bool isRight = (corner == 1 || corner == 3 || corner == 4);
             bool isTop   = (corner == 0 || corner == 1 || corner == 3);
 
-            int  n      = max(uNumBars, 1);
-            float xLeft  = float(barIndex)     / float(n) * 2.0 - 1.0;
-            float xRight = float(barIndex + 1) / float(n) * 2.0 - 1.0;
+            // Use actual bucket boundary positions to match the beat-position grid.
+            // uBarBoundaries[i] = bucket(i).startIdx / N  (normalised 0..1)
+            // uBarBoundaries[numBars] = 1.0
+            float normLeft  = uBarBoundaries[barIndex];
+            float normRight = uBarBoundaries[barIndex + 1];
+            float xLeft  = normLeft  * 2.0 - 1.0;
+            float xRight = normRight * 2.0 - 1.0;
             float x      = isRight ? xRight : xLeft;
 
             float yCenter = clamp(uRmsValues[barIndex] * uAmpScale, -1.0, 1.0);
@@ -94,23 +99,25 @@ bool RmsOverlayRenderer::create(juce::OpenGLContext& ctx) {
 
     // Cache uniform locations
     const GLuint prog = m_shader->getProgramID();
-    m_uRmsValuesLoc = ctx.extensions.glGetUniformLocation(prog, "uRmsValues[0]");
-    m_uNumBarsLoc   = ctx.extensions.glGetUniformLocation(prog, "uNumBars");
-    m_uAmpScaleLoc  = ctx.extensions.glGetUniformLocation(prog, "uAmpScale");
-    m_uHalfHLoc     = ctx.extensions.glGetUniformLocation(prog, "uHalfH");
-    m_uColourLoc    = ctx.extensions.glGetUniformLocation(prog, "uColour");
+    m_uRmsValuesLoc     = ctx.extensions.glGetUniformLocation(prog, "uRmsValues[0]");
+    m_uBarBoundariesLoc = ctx.extensions.glGetUniformLocation(prog, "uBarBoundaries[0]");
+    m_uNumBarsLoc       = ctx.extensions.glGetUniformLocation(prog, "uNumBars");
+    m_uAmpScaleLoc      = ctx.extensions.glGetUniformLocation(prog, "uAmpScale");
+    m_uHalfHLoc         = ctx.extensions.glGetUniformLocation(prog, "uHalfH");
+    m_uColourLoc        = ctx.extensions.glGetUniformLocation(prog, "uColour");
 
     return true;
 }
 
 void RmsOverlayRenderer::release() {
     m_shader.reset();
-    m_uRmsValuesLoc = -1;
-    m_uNumBarsLoc   = -1;
-    m_uAmpScaleLoc  = -1;
-    m_uHalfHLoc     = -1;
-    m_uColourLoc    = -1;
-    m_ctx           = nullptr;
+    m_uRmsValuesLoc     = -1;
+    m_uBarBoundariesLoc = -1;
+    m_uNumBarsLoc       = -1;
+    m_uAmpScaleLoc      = -1;
+    m_uHalfHLoc         = -1;
+    m_uColourLoc        = -1;
+    m_ctx               = nullptr;
 }
 
 // ============================================================================
@@ -118,7 +125,8 @@ void RmsOverlayRenderer::release() {
 // ============================================================================
 
 void RmsOverlayRenderer::setData(const float* values, int numBars,
-                                  float ampScale, bool show) {
+                                  float ampScale, bool show,
+                                  const float* barBoundaries) {
     const juce::SpinLock::ScopedLockType lock(m_lock);
     m_pending.show     = show;
     m_pending.ampScale = ampScale;
@@ -128,6 +136,16 @@ void RmsOverlayRenderer::setData(const float* values, int numBars,
         const int bars = juce::jmin(numBars, MAX_RMS_BARS);
         std::memcpy(m_pending.rmsValues, values, static_cast<size_t>(bars) * sizeof(float));
         m_pending.numBars = bars;
+
+        if (barBoundaries != nullptr) {
+            // numBars+1 boundary values (left edges of each bar + trailing 1.0)
+            std::memcpy(m_pending.barBoundaries, barBoundaries,
+                        static_cast<size_t>(bars + 1) * sizeof(float));
+        } else {
+            // Fallback: evenly-spaced boundaries
+            for (int i = 0; i <= bars; ++i)
+                m_pending.barBoundaries[i] = static_cast<float>(i) / static_cast<float>(bars);
+        }
     }
 
     m_newData = true;
@@ -157,10 +175,11 @@ void RmsOverlayRenderer::draw(int vpHeightPx) {
 
     m_shader->use();
 
-    // Upload RMS values and shared uniforms
-    glUniform1fv(m_uRmsValuesLoc, bars, m_render.rmsValues);
-    glUniform1i (m_uNumBarsLoc,   bars);
-    glUniform1f (m_uAmpScaleLoc,  ampScale);
+    // Upload RMS values, boundary positions, and shared uniforms
+    glUniform1fv(m_uRmsValuesLoc,     bars,       m_render.rmsValues);
+    glUniform1fv(m_uBarBoundariesLoc, bars + 1,   m_render.barBoundaries);
+    glUniform1i (m_uNumBarsLoc,       bars);
+    glUniform1f (m_uAmpScaleLoc,      ampScale);
 
     // NDC half-height: halfH_ndc = pixelHeight / (vpHeightPx / 2)
     //                            = 2.0f * pixelHeight / vpHeightPx

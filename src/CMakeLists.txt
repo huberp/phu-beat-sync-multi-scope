@@ -36,6 +36,8 @@ target_sources(phu-beat-sync-multi-scope PRIVATE
     gl/GridPlayheadGLRenderer.h
     gl/RmsOverlayRenderer.cpp
     gl/RmsOverlayRenderer.h
+    gl/CancellationOverlayRenderer.cpp
+    gl/CancellationOverlayRenderer.h
     
     # Debug components (moved to lib/debug/)
     ../lib/debug/EditorLogger.cpp

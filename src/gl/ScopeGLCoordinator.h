@@ -7,14 +7,16 @@
 #include "WaveformGLRenderer.h"
 #include "GridPlayheadGLRenderer.h"
 #include "RmsOverlayRenderer.h"
+#include "CancellationOverlayRenderer.h"
 
 /**
  * ScopeGLCoordinator — thin OpenGL coordinator for the ScopeDisplay.
  *
- * Owns the juce::OpenGLContext and three self-contained sub-renderers:
- *   - WaveformGLRenderer     — oscilloscope waveform lines
- *   - GridPlayheadGLRenderer — amplitude grid + beat-position playhead
- *   - RmsOverlayRenderer     — RMS amplitude bar overlay
+ * Owns the juce::OpenGLContext and four self-contained sub-renderers:
+ *   - WaveformGLRenderer          — oscilloscope waveform lines
+ *   - GridPlayheadGLRenderer      — amplitude grid + beat-position playhead
+ *   - RmsOverlayRenderer          — RMS amplitude bar overlay
+ *   - CancellationOverlayRenderer — inter-instance cancellation-index bar
  *
  * As the sole juce::OpenGLRenderer registered on the context, this class
  * drives the GL lifecycle callbacks and delegates all actual drawing to the
@@ -67,8 +69,15 @@ class ScopeGLCoordinator : public juce::OpenGLRenderer {
     /** Upload grid and playhead parameters. */
     void setGridPlayheadData(double displayRangeBeats, double currentPpq, bool broadcastOnly);
 
-    /** Upload RMS overlay data. */
-    void setRmsData(const float* values, int numBars, float ampScale, bool show);
+    /** Upload RMS overlay data.
+     *  @param barBoundaries  Normalised [0,1] left-edge per bar + trailing 1.0
+     *                        (numBars+1 values). Nullptr falls back to even spacing.
+     */
+    void setRmsData(const float* values, int numBars, float ampScale, bool show,
+                    const float* barBoundaries = nullptr);
+
+    /** Upload cancellation overlay data. */
+    void setCancellationData(const float* values, int numSlots, bool show);
 
     // -------------------------------------------------------------------------
     // juce::OpenGLRenderer (GL thread)
@@ -83,9 +92,10 @@ class ScopeGLCoordinator : public juce::OpenGLRenderer {
     std::atomic<bool>   m_available { false };
     juce::Component*    m_targetComponent = nullptr;
 
-    WaveformGLRenderer     m_waveform;
-    GridPlayheadGLRenderer m_gridPlayhead;
-    RmsOverlayRenderer     m_rms;
+    WaveformGLRenderer          m_waveform;
+    GridPlayheadGLRenderer      m_gridPlayhead;
+    RmsOverlayRenderer          m_rms;
+    CancellationOverlayRenderer m_cancellation;
 
     // Viewport dimensions packed as (logicalW << 32 | logicalH) for a single
     // lock-free atomic read/write across threads.
