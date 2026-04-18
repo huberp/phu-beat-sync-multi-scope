@@ -51,7 +51,7 @@ void ScopeDisplay::prepare(double displayBeats, double bpm, double sampleRate) {
 
 void ScopeDisplay::prepareInstance(InstanceSlot& inst) {
     // Reserve capacity for worst-case parameters (40 BPM, 192 kHz, max display beats)
-    // so that setWorkingSize() never gets capped below the desired size.
+    // so that prepare() never gets capped below the desired working size.
     constexpr double kMinBpm       = 40.0;
     constexpr double kMaxSampleRate = 192000.0;
     constexpr double kMaxBeats     = 8.0;
@@ -115,6 +115,20 @@ void ScopeDisplay::setFilterParams(bool hpEnabled, float hpFreq,
 // ============================================================================
 // Data Ingestion
 // ============================================================================
+
+/** Build a RingBufferInsertResult describing the wrap-aware dirty region
+ *  [startIdx, startIdx+count) within a ring of size N. */
+static phu::audio::RingBufferInsertResult buildDirtyResult(int startIdx, int count, int N) {
+    phu::audio::RingBufferInsertResult result;
+    result.ok = true;
+    if (startIdx + count <= N) {
+        result.range1 = {startIdx, startIdx + count};
+    } else {
+        result.range1 = {startIdx, N};
+        result.range2 = {0, (startIdx + count) - N};
+    }
+    return result;
+}
 
 void ScopeDisplay::applyFilterAndWriteBatch(InstanceSlot& inst,
                                              const float* samples, int numSamples,
@@ -187,15 +201,7 @@ void ScopeDisplay::applyFilterAndWriteBatch(InstanceSlot& inst,
                     inst.buffer.writeAt(idx, v);
                 }
 
-                // Build dirty result covering the full batch write range.
-                phu::audio::RingBufferInsertResult dirtyResult;
-                dirtyResult.ok = true;
-                if (startIdx + count <= N) {
-                    dirtyResult.range1 = {startIdx, startIdx + count};
-                } else {
-                    dirtyResult.range1 = {startIdx, N};
-                    dirtyResult.range2 = {0, (startIdx + count) - N};
-                }
+                auto dirtyResult = buildDirtyResult(startIdx, count, N);
                 inst.rmsBuckets.setDirty(dirtyResult);
                 inst.cancelBuckets.setDirty(dirtyResult);
                 m_frameHasNewData = true;
@@ -222,15 +228,7 @@ void ScopeDisplay::applyFilterAndWriteBatch(InstanceSlot& inst,
         inst.buffer.writeAt(i, v);
     }
 
-    // Build dirty result covering the whole batch.
-    phu::audio::RingBufferInsertResult dirtyResult;
-    dirtyResult.ok = true;
-    if (countB > 0) {
-        dirtyResult.range1 = {startIdx, startIdx + countA};
-        dirtyResult.range2 = {0, countB};
-    } else {
-        dirtyResult.range1 = {startIdx, startIdx + count};
-    }
+    auto dirtyResult = buildDirtyResult(startIdx, count, N);
     inst.rmsBuckets.setDirty(dirtyResult);
     inst.cancelBuckets.setDirty(dirtyResult);
     m_frameHasNewData = true;
