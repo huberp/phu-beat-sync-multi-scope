@@ -50,10 +50,30 @@ void ScopeDisplay::prepare(double displayBeats, double bpm, double sampleRate) {
 }
 
 void ScopeDisplay::prepareInstance(InstanceSlot& inst) {
+    // Reserve capacity for worst-case parameters (40 BPM, 192 kHz, max display beats)
+    // so that prepare() never gets capped below the desired working size.
+    constexpr double kMinBpm       = 40.0;
+    constexpr double kMaxSampleRate = 192000.0;
+    constexpr double kMaxBeats     = 8.0;
+    if (inst.buffer.capacity() == 0)
+        inst.buffer.reserveByWorstCase(kMinBpm, kMaxSampleRate, kMaxBeats);
+
     inst.buffer.prepare(m_displayRangeBeats, m_bpm, m_sampleRate);
     const int N = inst.buffer.size();
-    inst.rmsBuckets.recompute(m_bpm, m_sampleRate, m_displayRangeBeats, N);
-    inst.cancelBuckets.recompute(m_bpm, m_sampleRate, m_displayRangeBeats, N);
+
+    // Compute bucket counts matching the original formulas:
+    //   RMS:    ~16 buckets per beat (for 1/16-beat RMS display), capped at 128
+    //   Cancel: ~4 ms per bucket (ceil(sampleRate * 0.004)), capped at 256
+    const int rmsBucketCount = (m_displayRangeBeats > 0.0)
+        ? std::min(128, std::max(1, static_cast<int>(m_displayRangeBeats * 16.0)))
+        : 1;
+    const int cancelBucketSize = std::max(1, static_cast<int>(std::ceil(m_sampleRate * 0.004)));
+    const int cancelBucketCount = (N > 0)
+        ? std::min(256, std::max(1, (N + cancelBucketSize - 1) / cancelBucketSize))
+        : 0;
+
+    inst.rmsBuckets.initializeBySize(N, rmsBucketCount);
+    inst.cancelBuckets.initializeBySize(N, cancelBucketCount);
     inst.rmsValues.assign(static_cast<size_t>(inst.rmsBuckets.bucketCount()), 0.0f);
     inst.displayBins.assign(DISPLAY_BINS, 0.0f);
     inst.lastWindowStart = -1e18;
@@ -62,13 +82,13 @@ void ScopeDisplay::prepareInstance(InstanceSlot& inst) {
 
 void ScopeDisplay::updateInstanceFilter(InstanceSlot& inst) {
     if (m_sampleRate <= 0.0) return;
-    inst.filterHP.setParams(LinkwitzRiley::FilterType::HighPass,
-                            LinkwitzRiley::Slope::DB48,
+    inst.filterHP.setParams(phu::audio::LinkwitzRiley::FilterType::HighPass,
+                            phu::audio::LinkwitzRiley::Slope::DB48,
                             m_hpFreq,
                             static_cast<float>(m_sampleRate));
     inst.filterHP.reset();
-    inst.filterLP.setParams(LinkwitzRiley::FilterType::LowPass,
-                            LinkwitzRiley::Slope::DB48,
+    inst.filterLP.setParams(phu::audio::LinkwitzRiley::FilterType::LowPass,
+                            phu::audio::LinkwitzRiley::Slope::DB48,
                             m_lpFreq,
                             static_cast<float>(m_sampleRate));
     inst.filterLP.reset();
@@ -95,6 +115,20 @@ void ScopeDisplay::setFilterParams(bool hpEnabled, float hpFreq,
 // ============================================================================
 // Data Ingestion
 // ============================================================================
+
+/** Build a RingBufferInsertResult describing the wrap-aware dirty region
+ *  [startIdx, startIdx+count) within a ring of size N. */
+static phu::audio::RingBufferInsertResult buildDirtyResult(int startIdx, int count, int N) {
+    phu::audio::RingBufferInsertResult result;
+    result.ok = true;
+    if (startIdx + count <= N) {
+        result.range1 = {startIdx, startIdx + count};
+    } else {
+        result.range1 = {startIdx, N};
+        result.range2 = {0, (startIdx + count) - N};
+    }
+    return result;
+}
 
 void ScopeDisplay::applyFilterAndWriteBatch(InstanceSlot& inst,
                                              const float* samples, int numSamples,
@@ -167,10 +201,9 @@ void ScopeDisplay::applyFilterAndWriteBatch(InstanceSlot& inst,
                     inst.buffer.writeAt(idx, v);
                 }
 
-                // Dirty mark: wrap-aware (startIdx, lastIdx)
-                const int lastIdx = (startIdx + count - 1) % N;
-                inst.rmsBuckets.markDirtyRange(startIdx, lastIdx);
-                inst.cancelBuckets.markDirtyRange(startIdx, lastIdx);
+                auto dirtyResult = buildDirtyResult(startIdx, count, N);
+                inst.rmsBuckets.setDirty(dirtyResult);
+                inst.cancelBuckets.setDirty(dirtyResult);
                 m_frameHasNewData = true;
                 return;
             }
@@ -195,10 +228,9 @@ void ScopeDisplay::applyFilterAndWriteBatch(InstanceSlot& inst,
         inst.buffer.writeAt(i, v);
     }
 
-    // Single dirty-range call covering the whole batch.
-    const int lastIdx = (startIdx + count - 1) % N;
-    inst.rmsBuckets.markDirtyRange(startIdx, lastIdx);
-    inst.cancelBuckets.markDirtyRange(startIdx, lastIdx);
+    auto dirtyResult = buildDirtyResult(startIdx, count, N);
+    inst.rmsBuckets.setDirty(dirtyResult);
+    inst.cancelBuckets.setDirty(dirtyResult);
     m_frameHasNewData = true;
 }
 
@@ -767,7 +799,7 @@ void ScopeDisplay::drawRmsOverlay(juce::Graphics& g, juce::Rectangle<float> area
     const bool useSum = m_showRemote && hasActiveRemotes;
 
     // Find the reference instance so we can map bucket index-ranges to pixel
-    // positions exactly as RawSampleBuffer does (startIdx/N → beat fraction).
+    // positions exactly as PpqAddressedRingBuffer does (startIdx/N → beat fraction).
     // This avoids the off-by-fractional-bucket alignment that occurs when
     // integer truncation in computeBucketSize() creates a small leftover bucket.
     const InstanceSlot* refInst = nullptr;

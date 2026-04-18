@@ -1,3 +1,6 @@
 [submodule "JUCE"]
 	path = JUCE
 	url = https://github.com/juce-framework/JUCE.git
+[submodule "phu-audio-lib"]
+	path = phu-audio-lib
+	url = https://github.com/huberp/phu-audio-lib.git
