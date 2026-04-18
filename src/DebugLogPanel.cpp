@@ -1,5 +1,5 @@
 #include "DebugLogPanel.h"
-#include "../lib/debug/EditorLogger.h"
+#include "debug/EditorLogger.h"
 #include "PluginProcessor.h"
 #include <sstream>
 

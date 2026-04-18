@@ -1,9 +1,9 @@
 #pragma once
 
-#include "../lib/StringUtil.h"
-#include "../lib/events/SyncGlobals.h"
-#include "../lib/network/CtrlBroadcaster.h"
-#include "../lib/network/SampleBroadcaster.h"
+#include "util/StringUtil.h"
+#include "events/SyncGlobals.h"
+#include "network/CtrlBroadcaster.h"
+#include "network/SampleBroadcaster.h"
 #include <array>
 #include <atomic>
 #include <juce_audio_processors/juce_audio_processors.h>

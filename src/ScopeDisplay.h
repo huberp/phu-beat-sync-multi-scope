@@ -1,10 +1,10 @@
 #pragma once
 
-#include "../lib/audio/BucketSet.h"
-#include "../lib/audio/RawSampleBuffer.h"
-#include "../lib/LinkwitzRileyFilter.h"
-#include "../lib/network/CtrlBroadcaster.h"
-#include "../lib/network/SampleBroadcaster.h"
+#include "audio/BucketSet.h"
+#include "audio/RawSampleBuffer.h"
+#include "audio/LinkwitzRileyFilter.h"
+#include "network/CtrlBroadcaster.h"
+#include "network/SampleBroadcaster.h"
 #include "gl/ScopeGLCoordinator.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <array>
@@ -158,8 +158,8 @@ class ScopeDisplay : public juce::Component {
         phu::audio::RawSampleBuffer<float> buffer;
         phu::audio::BucketSet        rmsBuckets   { phu::audio::BucketSet::Kind::Rms    };
         phu::audio::BucketSet        cancelBuckets{ phu::audio::BucketSet::Kind::Cancel };
-        LinkwitzRiley::LinkwitzRileyFilter<float> filterHP;
-        LinkwitzRiley::LinkwitzRileyFilter<float> filterLP;
+        phu::audio::LinkwitzRiley::LinkwitzRileyFilter<float> filterHP;
+        phu::audio::LinkwitzRiley::LinkwitzRileyFilter<float> filterLP;
 
         bool     active     = false;
         bool     isLocal    = false;   ///< true only for the local instance slot

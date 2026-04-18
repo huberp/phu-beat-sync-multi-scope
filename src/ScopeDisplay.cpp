@@ -62,13 +62,13 @@ void ScopeDisplay::prepareInstance(InstanceSlot& inst) {
 
 void ScopeDisplay::updateInstanceFilter(InstanceSlot& inst) {
     if (m_sampleRate <= 0.0) return;
-    inst.filterHP.setParams(LinkwitzRiley::FilterType::HighPass,
-                            LinkwitzRiley::Slope::DB48,
+    inst.filterHP.setParams(phu::audio::LinkwitzRiley::FilterType::HighPass,
+                            phu::audio::LinkwitzRiley::Slope::DB48,
                             m_hpFreq,
                             static_cast<float>(m_sampleRate));
     inst.filterHP.reset();
-    inst.filterLP.setParams(LinkwitzRiley::FilterType::LowPass,
-                            LinkwitzRiley::Slope::DB48,
+    inst.filterLP.setParams(phu::audio::LinkwitzRiley::FilterType::LowPass,
+                            phu::audio::LinkwitzRiley::Slope::DB48,
                             m_lpFreq,
                             static_cast<float>(m_sampleRate));
     inst.filterLP.reset();

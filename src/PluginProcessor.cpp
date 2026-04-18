@@ -1,12 +1,12 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include "../lib/network/SampleBroadcaster.h"
+#include "network/SampleBroadcaster.h"
 #include <chrono>
 #include <cmath>
 #include <cstring>
 
 #if PHU_DEBUG_UI
-#include "../lib/debug/EditorLogger.h"
+#include "debug/EditorLogger.h"
 #endif
 
 // ============================================================================

@@ -38,18 +38,6 @@ target_sources(phu-beat-sync-multi-scope PRIVATE
     gl/RmsOverlayRenderer.h
     gl/CancellationOverlayRenderer.cpp
     gl/CancellationOverlayRenderer.h
-    
-    # Debug components (moved to lib/debug/)
-    ../lib/debug/EditorLogger.cpp
-    ../lib/debug/EditorLogger.h
-
-    # Network components with .cpp implementations
-    ../lib/network/MulticastBroadcasterBase.cpp
-    ../lib/network/MulticastBroadcasterBase.h
-    ../lib/network/SampleBroadcaster.cpp
-    ../lib/network/SampleBroadcaster.h
-    ../lib/network/CtrlBroadcaster.cpp
-    ../lib/network/CtrlBroadcaster.h
 )
 
 target_compile_definitions(phu-beat-sync-multi-scope PUBLIC

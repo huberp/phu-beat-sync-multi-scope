@@ -2,7 +2,7 @@
 #include "PluginProcessor.h"
 
 #if PHU_DEBUG_UI
-#include "../lib/debug/EditorLogger.h"
+#include "debug/EditorLogger.h"
 #endif
 
 // ============================================================================

@@ -7,8 +7,8 @@ namespace phu { namespace debug { class EditorLogger; } }
 
 #if PHU_DEBUG_UI // Debug builds only
 
-#include "../lib/debug/DebugLogSink.h"
-#include "../lib/debug/DebugLogEventQueue.h"
+#include "debug/DebugLogSink.h"
+#include "debug/DebugLogEventQueue.h"
 
 /**
  * Reusable debug log display panel component.
