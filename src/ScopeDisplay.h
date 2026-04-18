@@ -1,7 +1,7 @@
 #pragma once
 
 #include "audio/BucketSet.h"
-#include "audio/RawSampleBuffer.h"
+#include "audio/PpqAddressedRingBuffer.h"
 #include "audio/LinkwitzRileyFilter.h"
 #include "network/CtrlBroadcaster.h"
 #include "network/SampleBroadcaster.h"
@@ -18,7 +18,7 @@ using phu::network::SampleBroadcaster;
  *
  * Renders waveform data for up to 8 instances (1 local + 7 remotes) aligned to
  * musical position.  Each instance's raw sample stream is written into a
- * RawSampleBuffer (position-addressed overwrite ring), with the HP/LP display
+ * PpqAddressedRingBuffer (position-addressed overwrite ring), with the HP/LP display
  * filter applied per-sample before the write.  BucketSet-driven dirty tracking
  * ensures only changed regions are recomputed for the RMS and cancellation
  * overlays.
@@ -51,7 +51,7 @@ class ScopeDisplay : public juce::Component {
 
     /**
      * Prepare the pipeline for new display parameters.
-     * Clears and resizes all RawSampleBuffers and BucketSets.
+     * Clears and resizes all PpqAddressedRingBuffers and BucketSets.
      * Call whenever displayBeats, bpm, or sampleRate changes.
      */
     void prepare(double displayBeats, double bpm, double sampleRate);
@@ -113,7 +113,7 @@ class ScopeDisplay : public juce::Component {
     /**
      * Consume remote raw-sample packets.
      * For each packet, per-instance HP/LP filter state is applied to every sample
-     * before writing into its RawSampleBuffer.  Remote instances beyond
+     * before writing into its PpqAddressedRingBuffer.  Remote instances beyond
      * MAX_INSTANCES − 1 are silently discarded.
      *
      * @param packets  Latest snapshot from SampleBroadcaster::getReceivedPackets().
@@ -135,7 +135,7 @@ class ScopeDisplay : public juce::Component {
     void setLocalInstanceIndex(int newIndex);
 
     /**
-     * Scatter every active RawSampleBuffer to its 4096-bin display array
+     * Scatter every active PpqAddressedRingBuffer to its 4096-bin display array
      * (dirty RMS buckets only), then recompute dirty RMS and cancellation
      * buckets when their respective overlays are enabled.
      * Call once per frame after all writeLocalSample / writeRemotePackets calls
@@ -155,9 +155,9 @@ class ScopeDisplay : public juce::Component {
     // -------------------------------------------------------------------------
 
     struct InstanceSlot {
-        phu::audio::RawSampleBuffer<float> buffer;
-        phu::audio::BucketSet        rmsBuckets   { phu::audio::BucketSet::Kind::Rms    };
-        phu::audio::BucketSet        cancelBuckets{ phu::audio::BucketSet::Kind::Cancel };
+        phu::audio::PpqAddressedRingBuffer<float> buffer;
+        phu::audio::BucketSet        rmsBuckets;
+        phu::audio::BucketSet        cancelBuckets;
         phu::audio::LinkwitzRiley::LinkwitzRileyFilter<float> filterHP;
         phu::audio::LinkwitzRiley::LinkwitzRileyFilter<float> filterLP;
 

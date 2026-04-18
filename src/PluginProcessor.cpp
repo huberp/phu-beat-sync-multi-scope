@@ -236,7 +236,7 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
         const float monoScale = (activeCh == 1) ? 1.0f : 0.5f;
 
         // --- Phase-3: batch-push (monoSample, absolutePpq) to the local SPSC ring.
-        // The UI thread drains this ring to write into RawSampleBuffer[local].
+        // The UI thread drains this ring to write into PpqAddressedRingBuffer[local].
         // AbstractFifo::write() silently reserves fewer slots when the ring is near
         // full; any overflow samples are dropped (ring is sized for 4× headroom).
         if (!m_broadcastOnlyMode.load(std::memory_order_relaxed)) {
