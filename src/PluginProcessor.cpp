@@ -5,7 +5,7 @@
 #include <cmath>
 #include <cstring>
 
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
 #include "debug/EditorLogger.h"
 #endif
 
@@ -29,7 +29,7 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
                          .withInput("Input", juce::AudioChannelSet::stereo(), true)
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "Parameters", createParameterLayout()) {
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
     editorLogger = std::make_unique<phu::debug::EditorLogger>();
 #endif
 
@@ -42,7 +42,7 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
     // Initialize ctrl broadcaster networking
     m_ctrlBroadcaster.initialize();
 
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
     // Connect the editor logger for network debug output
     if (editorLogger)
         m_ctrlBroadcaster.setEditorLogger(editorLogger.get());

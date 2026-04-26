@@ -1,7 +1,7 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
 #include "debug/EditorLogger.h"
 #endif
 
@@ -235,7 +235,7 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
     audioProcessor.getAPVTS().addParameterListener("display_hp_freq", this);
     audioProcessor.getAPVTS().addParameterListener("display_lp_freq", this);
 
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
     // --- Debug Log Panel ---
     // Create reusable DebugLogPanel with independent low-rate UI timer
     m_debugLogPanel = std::make_unique<DebugLogPanel>(&audioProcessor);
@@ -252,7 +252,7 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::PhuBeatSyncMultiScopeAudioProcessorEd
 
     // Set window size LAST — ensures all children (including debug panel) exist
     // when resized() fires for the first time.
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
     setSize(800, 732);  // Extra 120px for debug panel
 #else
     setSize(800, 612);
@@ -268,7 +268,7 @@ PhuBeatSyncMultiScopeAudioProcessorEditor::~PhuBeatSyncMultiScopeAudioProcessorE
     audioProcessor.getAPVTS().removeParameterListener("display_hp_freq", this);
     audioProcessor.getAPVTS().removeParameterListener("display_lp_freq", this);
 
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
     // Detach logger from panel (panel destructor stops its timer)
     if (m_debugLogPanel)
         m_debugLogPanel->detachLogger();
@@ -374,7 +374,7 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::resized() {
     // Main display area
     area.reduce(10, 5);
 
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
     // Debug log panel at bottom with independent low-rate timer
     if (m_debugLogPanel) {
         auto logArea = area.removeFromBottom(120);

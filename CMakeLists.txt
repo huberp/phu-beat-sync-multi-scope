@@ -14,9 +14,17 @@ set(JUCE_BUILD_EXTRAS OFF CACHE BOOL "Build JUCE Extras")
 set(JUCE_BUILD_EXAMPLES OFF CACHE BOOL "Build JUCE Examples")
 
 set(JUCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/JUCE" CACHE PATH "Path to JUCE root")
+if(NOT EXISTS "${JUCE_ROOT}/CMakeLists.txt")
+    message(FATAL_ERROR "JUCE submodule not found. Run: git submodule update --init --recursive")
+endif()
 add_subdirectory("${JUCE_ROOT}")
 
-add_subdirectory(phu-audio-lib)
+set(PHU_AUDIO_LIB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/phu-audio-lib" CACHE PATH "Path to PhuAudioLib root")
+if(NOT EXISTS "${PHU_AUDIO_LIB_ROOT}/CMakeLists.txt")
+    message(FATAL_ERROR "PhuAudioLib submodule not found. Run: git submodule update --init --recursive")
+endif()
+add_subdirectory("${PHU_AUDIO_LIB_ROOT}")
+
 # PhuNetworkLib's .cpp files include juce_core headers; link the JUCE
 # target that the parent project already provides, with matching defines.
 target_link_libraries(PhuNetworkLib PUBLIC juce::juce_core)

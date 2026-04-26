@@ -9,7 +9,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 // Forward declarations
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
 namespace phu { namespace debug { class EditorLogger; } }
 #endif
 
@@ -48,7 +48,7 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
     phu::debug::EditorLogger* getEditorLogger() const {
         return editorLogger.get();
     }
@@ -143,7 +143,7 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     // DAW synchronization globals
     phu::events::SyncGlobals m_syncGlobals;
 
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
     std::unique_ptr<phu::debug::EditorLogger> editorLogger;
 #endif
 

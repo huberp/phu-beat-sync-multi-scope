@@ -48,8 +48,6 @@ target_compile_definitions(phu-beat-sync-multi-scope PUBLIC
     JUCE_USE_MP3AUDIOFORMAT=0
     JUCE_USE_OGGVORBIS=0
     JUCE_USE_FLAC=0
-    $<$<CONFIG:Debug>:PHU_DEBUG_UI=1>
-    $<$<NOT:$<CONFIG:Debug>>:PHU_DEBUG_UI=0>
 )
 
 # Prevent Windows.h from defining min/max macros

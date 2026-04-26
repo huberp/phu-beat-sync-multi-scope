@@ -5,7 +5,7 @@
 class PhuBeatSyncMultiScopeAudioProcessor;
 namespace phu { namespace debug { class EditorLogger; } }
 
-#if PHU_DEBUG_UI // Debug builds only
+#ifndef NDEBUG // Debug builds only
 
 #include "debug/DebugLogSink.h"
 #include "debug/DebugLogEventQueue.h"
@@ -116,4 +116,4 @@ class DebugLogPanel : public juce::Component
     void setFlushRateHz(double) {}
     void setMaxLines(int) {}
 };
-  #endif // PHU_DEBUG_UI
+  #endif // NDEBUG
