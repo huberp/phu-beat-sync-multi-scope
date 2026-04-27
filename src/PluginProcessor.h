@@ -1,15 +1,15 @@
 #pragma once
 
-#include "../lib/StringUtil.h"
-#include "../lib/events/SyncGlobals.h"
-#include "../lib/network/CtrlBroadcaster.h"
-#include "../lib/network/SampleBroadcaster.h"
+#include "util/StringUtil.h"
+#include "events/SyncGlobals.h"
+#include "network/CtrlBroadcaster.h"
+#include "network/SampleBroadcaster.h"
 #include <array>
 #include <atomic>
 #include <juce_audio_processors/juce_audio_processors.h>
 
 // Forward declarations
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
 namespace phu { namespace debug { class EditorLogger; } }
 #endif
 
@@ -48,7 +48,7 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
     phu::debug::EditorLogger* getEditorLogger() const {
         return editorLogger.get();
     }
@@ -143,7 +143,7 @@ class PhuBeatSyncMultiScopeAudioProcessor : public juce::AudioProcessor,
     // DAW synchronization globals
     phu::events::SyncGlobals m_syncGlobals;
 
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
     std::unique_ptr<phu::debug::EditorLogger> editorLogger;
 #endif
 

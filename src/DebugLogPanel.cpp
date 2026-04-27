@@ -1,9 +1,9 @@
 #include "DebugLogPanel.h"
-#include "../lib/debug/EditorLogger.h"
+#include "debug/EditorLogger.h"
 #include "PluginProcessor.h"
 #include <sstream>
 
-#if PHU_DEBUG_UI // Debug builds only
+#ifndef NDEBUG // Debug builds only
 
 DebugLogPanel::DebugLogPanel(PhuBeatSyncMultiScopeAudioProcessor* processor)
     : m_processor(processor)
@@ -169,5 +169,5 @@ void DebugLogPanel::LogFlushTimer::timerCallback()
         m_parent->flushQueueBatch();
 }
 
-#endif // PHU_DEBUG_UI
+#endif // NDEBUG
 

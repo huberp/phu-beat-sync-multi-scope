@@ -38,18 +38,6 @@ target_sources(phu-beat-sync-multi-scope PRIVATE
     gl/RmsOverlayRenderer.h
     gl/CancellationOverlayRenderer.cpp
     gl/CancellationOverlayRenderer.h
-    
-    # Debug components (moved to lib/debug/)
-    ../lib/debug/EditorLogger.cpp
-    ../lib/debug/EditorLogger.h
-
-    # Network components with .cpp implementations
-    ../lib/network/MulticastBroadcasterBase.cpp
-    ../lib/network/MulticastBroadcasterBase.h
-    ../lib/network/SampleBroadcaster.cpp
-    ../lib/network/SampleBroadcaster.h
-    ../lib/network/CtrlBroadcaster.cpp
-    ../lib/network/CtrlBroadcaster.h
 )
 
 target_compile_definitions(phu-beat-sync-multi-scope PUBLIC
@@ -60,8 +48,6 @@ target_compile_definitions(phu-beat-sync-multi-scope PUBLIC
     JUCE_USE_MP3AUDIOFORMAT=0
     JUCE_USE_OGGVORBIS=0
     JUCE_USE_FLAC=0
-    $<$<CONFIG:Debug>:PHU_DEBUG_UI=1>
-    $<$<NOT:$<CONFIG:Debug>>:PHU_DEBUG_UI=0>
 )
 
 # Prevent Windows.h from defining min/max macros

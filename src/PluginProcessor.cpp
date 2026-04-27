@@ -1,12 +1,12 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include "../lib/network/SampleBroadcaster.h"
+#include "network/SampleBroadcaster.h"
 #include <chrono>
 #include <cmath>
 #include <cstring>
 
-#if PHU_DEBUG_UI
-#include "../lib/debug/EditorLogger.h"
+#ifndef NDEBUG
+#include "debug/EditorLogger.h"
 #endif
 
 // ============================================================================
@@ -29,7 +29,7 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
                          .withInput("Input", juce::AudioChannelSet::stereo(), true)
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "Parameters", createParameterLayout()) {
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
     editorLogger = std::make_unique<phu::debug::EditorLogger>();
 #endif
 
@@ -42,7 +42,7 @@ PhuBeatSyncMultiScopeAudioProcessor::PhuBeatSyncMultiScopeAudioProcessor()
     // Initialize ctrl broadcaster networking
     m_ctrlBroadcaster.initialize();
 
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
     // Connect the editor logger for network debug output
     if (editorLogger)
         m_ctrlBroadcaster.setEditorLogger(editorLogger.get());
@@ -236,7 +236,7 @@ void PhuBeatSyncMultiScopeAudioProcessor::processBlock(juce::AudioBuffer<float>&
         const float monoScale = (activeCh == 1) ? 1.0f : 0.5f;
 
         // --- Phase-3: batch-push (monoSample, absolutePpq) to the local SPSC ring.
-        // The UI thread drains this ring to write into RawSampleBuffer[local].
+        // The UI thread drains this ring to write into PpqAddressedRingBuffer[local].
         // AbstractFifo::write() silently reserves fewer slots when the ring is near
         // full; any overflow samples are dropped (ring is sized for 4× headroom).
         if (!m_broadcastOnlyMode.load(std::memory_order_relaxed)) {

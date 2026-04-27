@@ -115,7 +115,7 @@ class PhuBeatSyncMultiScopeAudioProcessorEditor
     void syncUIFromProcessorState();
     void applyBroadcastOnlyUiState(bool enabled);
 
-#if PHU_DEBUG_UI
+#ifndef NDEBUG
     // Reusable debug log panel with decoupled low-rate UI timer
     std::unique_ptr<DebugLogPanel> m_debugLogPanel;
 #endif
