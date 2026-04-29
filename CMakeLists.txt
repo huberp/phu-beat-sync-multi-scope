@@ -39,6 +39,13 @@ target_compile_definitions(PhuGLUtils PUBLIC
 # Static libs linked into a shared library (VST3) need PIC
 set_target_properties(PhuNetworkLib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(PhuGLUtils PROPERTIES POSITION_INDEPENDENT_CODE ON)
-add_subdirectory(lib)
+# Beat-sync multi-scope support library
+add_library(BeatSyncLib INTERFACE)
+target_link_libraries(BeatSyncLib INTERFACE
+    PhuAudioLib
+    PhuNetworkLib
+    PhuGLUtils
+)
+
 add_subdirectory(src)
 add_subdirectory(tests)
