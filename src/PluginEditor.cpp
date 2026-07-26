@@ -452,7 +452,11 @@ void PhuBeatSyncMultiScopeAudioProcessorEditor::timerCallback() {
         return;
 
     // --- Prepare pipeline when display parameters change ---
-    const bool pipelineParamsChanged = (bpm != m_lastBpm ||
+    // Use a tolerance for BPM: many DAWs compute BPM from a sample-accurate
+    // tempo counter, producing epsilon-level variation every processBlock.
+    // Exact != comparison would call prepare() (and clear the ring buffer)
+    // on every 60 Hz tick, leaving only one tick's worth of audio visible.
+    const bool pipelineParamsChanged = (std::abs(bpm - m_lastBpm) > 0.01 ||
                                         sampleRate != m_lastSampleRate ||
                                         displayBeats != m_lastDisplayRangeBeats);
     if (pipelineParamsChanged && bpm > 0.0 && sampleRate > 0.0 && displayBeats > 0.0)
