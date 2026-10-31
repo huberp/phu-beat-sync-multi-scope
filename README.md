@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue.svg)](#building)
 [![Format](https://img.shields.io/badge/format-VST3%20%7C%20AU-purple.svg)](#building)
-[![JUCE](https://img.shields.io/badge/JUCE-8.0.12-orange.svg)](https://juce.com)
+[![JUCE](https://img.shields.io/badge/JUCE-8.0.15-orange.svg)](https://juce.com)
 [![Coffee](https://img.shields.io/badge/By%20me%20a%20Coffee-purple.svg)](https://ko-fi.com/phuplugins)
 
 A VST3 oscilloscope that loads on multiple DAW tracks simultaneously. All instances stay beat-aligned and share waveforms over the local network in real time — useful for comparing phase, level and transient alignment across tracks.

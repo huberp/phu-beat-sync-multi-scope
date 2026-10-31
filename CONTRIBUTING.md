@@ -3,7 +3,7 @@
 Contributions are welcome.
 
 1. Fork and branch from `main`
-2. Follow existing C++17/JUCE code style
+2. Follow existing C++20/JUCE code style
 3. Keep to the hard rules in [`.github/copilot-instructions.md`](.github/copilot-instructions.md) — in particular: **no network I/O on the audio thread**
 4. Verify the project builds and passes pluginval before opening a PR
 
@@ -17,7 +17,10 @@ Contributions are welcome.
 phu-beat-sync-multi-scope/
 ├── CMakeLists.txt / CMakePresets.json
 ├── doc/                            Screenshots
-├── JUCE/                           JUCE 8.0.12 (git submodule)
+├── cmake/
+│   ├── PhuDependencies.cmake       FetchContent helpers for JUCE and phu-audio-lib
+│   ├── juce_config.cmake           JUCE feature flags and build options
+│   └── compiler_flags.cmake        Optional warnings / sanitizers / coverage
 ├── src/
 │   ├── PluginProcessor.h/cpp       processBlock, ping-pong broadcast buffer,
 │   │                               SPSC local ring, CTRL heartbeat timer (30 Hz)
@@ -57,60 +60,74 @@ phu-beat-sync-multi-scope/
 
 | Tool | Minimum version |
 |---|---|
-| CMake | 3.15 |
-| C++ compiler | C++17 — MSVC 2022, GCC 11, or Clang 14 |
-| JUCE | 8.0.12 (included as git submodule) |
+| CMake | 3.28 |
+| C++ compiler | C++20 — MSVC 2022, GCC 11, or Clang 14 |
+| JUCE | 8.0.15 (fetched by CMake into `JUCE/`) |
+| phu-audio-lib | `main` (fetched by CMake into `phu-audio-lib/`) |
 
 ### Clone
+
+JUCE and phu-audio-lib are downloaded automatically during the first CMake configure (network access required).
 
 ```bash
 git clone https://github.com/huberp/phu-beat-sync-multi-scope.git
 cd phu-beat-sync-multi-scope
-git submodule update --init --recursive
 ```
 
 ### Windows
 
 ```bash
-cmake --preset vs2026-x64
-cmake --build --preset vs2026-build --config Release
+cmake --preset windows-x64-vst3-release
+cmake --build --preset windows-x64-vst3-release-build
 ```
 
-Output: `build/vs2026-x64/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/`
+Output: `build/windows-x64-vst3-release/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/`
 
-### macOS Intel (x86_64)
+### macOS Intel (x64)
 
 ```bash
-cmake --preset macos-x86_64-release
-cmake --build --preset macos-x86_64-build
+cmake --preset macos-x64-release
+cmake --build --preset macos-x64-release-build
 ```
 
 Output:
-- `build/macos-x86_64-release/src/phu-beat-sync-multi-scope_artefacts/Release/AU/` (AU)
-- `build/macos-x86_64-release/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/` (VST3)
+- `build/macos-x64-release/src/phu-beat-sync-multi-scope_artefacts/Release/AU/` (AU)
+- `build/macos-x64-release/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/` (VST3)
 
 ### macOS Apple Silicon (arm64)
 
 ```bash
 cmake --preset macos-arm64-release
-cmake --build --preset macos-arm64-build
+cmake --build --preset macos-arm64-release-build
 ```
 
 Output:
 - `build/macos-arm64-release/src/phu-beat-sync-multi-scope_artefacts/Release/AU/` (AU)
 - `build/macos-arm64-release/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/` (VST3)
 
+Single-format builds: `macos-arm64-release-build-vst3` / `macos-arm64-release-build-au` (same configure preset).
+
 ### Linux
 
 ```bash
 sudo bash scripts/install-linux-deps.sh
-cmake --preset linux-release
-cmake --build --preset linux-build
+cmake --preset linux-x64-vst3-release
+cmake --build --preset linux-x64-vst3-release-build
 ```
 
-If the build times out: `cmake --build --preset linux-build -j2`
+If the build times out: `cmake --build --preset linux-x64-vst3-release-build -j2`
 
-Output: `build/linux-release/src/phu-beat-sync-multi-scope_artefacts/VST3/`
+Output: `build/linux-x64-vst3-release/src/phu-beat-sync-multi-scope_artefacts/Release/VST3/`
+
+Presets follow `<os>-<arch>-<format>-<config>` (macOS omits the format and builds VST3 + AU); every configure preset has a matching `-build` preset. See `cmake --list-presets=all`.
+
+### Optional diagnostics
+
+| Option / preset | Purpose |
+|---|---|
+| `-DENABLE_STRICT_WARNINGS=ON` | Strict compiler warnings for this project's code (not for fetched dependencies) |
+| `--preset sanitizers` / `--preset sanitizers-build` | Debug build with Address + Undefined Behavior sanitizers |
+| `--preset coverage` / `--preset coverage-build` | Debug build with coverage instrumentation |
 
 ---
 

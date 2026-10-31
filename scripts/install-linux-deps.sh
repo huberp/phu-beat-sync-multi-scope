@@ -46,5 +46,5 @@ echo "Note: This installs only the minimal dependencies required for this plugin
 echo "Optional dependencies (webkit, curl, ladspa) are disabled via CMake flags."
 echo ""
 echo "You can now build with:"
-echo "  cmake --preset linux-release"
-echo "  cmake --build --preset linux-build"
+echo "  cmake --preset linux-x64-vst3-release"
+echo "  cmake --build --preset linux-x64-vst3-release-build"
