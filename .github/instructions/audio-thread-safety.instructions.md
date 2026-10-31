@@ -1,6 +1,6 @@
 ---
 description: "Use when: writing or editing C++ audio code, processBlock, audio callbacks, real-time DSP, lock-free buffers, JUCE AudioProcessor. Enforces real-time audio thread safety constraints."
-applyTo: ["src/**/*.{h,cpp}", "lib/**/*.{h,cpp}"]
+applyTo: ["src/**/*.{h,cpp}"]
 ---
 
 # Audio Thread Safety Rules
@@ -11,7 +11,7 @@ Code in `processBlock`, `renderNextBlock`, timer callbacks called from the audio
 
 1. **No memory allocation** — `new`, `delete`, `malloc`, `free`, `std::vector::push_back`, `std::vector::resize`, `std::string` construction/concatenation, `juce::String` construction, `juce::Array` mutation, `std::make_shared`, `std::make_unique` in hot path.
 2. **No locks** — `std::mutex`, `std::lock_guard`, `std::unique_lock`, `juce::CriticalSection`, `juce::SpinLock`, `juce::ScopedLock`. If you need shared state, use `std::atomic` or a lock-free FIFO.
-3. **No system calls** — File I/O (`fopen`, `std::fstream`), logging (`DBG`, `std::cout`, `printf`), network calls, `std::this_thread::sleep_for`.
+3. **No system calls** — File I/O (`fopen`, `std::fstream`), logging (`DBG`, `std::cout`, `printf`), network calls, `std::this_thread::sleep_for`. *Single documented exception in this project:* `SampleBroadcaster::broadcastRawSamples()` (lock-free loopback `sendto()` from pre-allocated slots). Do not add others.
 4. **No virtual dispatch in tight loops** — Avoid calling virtual methods per-sample. Resolve to concrete types before the sample loop.
 5. **No exceptions** — Do not throw or rely on try/catch in audio processing code.
 

@@ -28,6 +28,7 @@ target_sources(phu-beat-sync-multi-scope PRIVATE
     DisplayFilterStrip.h
     DebugLogPanel.cpp
     DebugLogPanel.h
+    DisplayRangeLimits.h
 
     #opengl renderers
     gl/WaveformGLRenderer.cpp

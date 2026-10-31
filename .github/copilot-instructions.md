@@ -17,59 +17,72 @@ If builds timeout:
 - Ensure all dependencies are installed before attempting to build
 - The JUCE and phu-audio-lib fetch must complete (network access to GitHub is required on first configure)
 
+### Tests
+
+Project unit tests live in `tests/` (`test_display_range.cpp` tests the JUCE-free `src/DisplayRangeLimits.h`). Build the `test_display_range` target and run `ctest --test-dir build/<preset> -C Release --output-on-failure`. Tests for the shared `PpqAddressedRingBuffer`/`BucketSet` and other phu-audio-lib headers live in the phu-audio-lib repo (https://github.com/huberp/phu-audio-lib, `tests/` folder); changes to those classes must be tested there.
+
 ### Documentation
 
-- Main README: [README.md](./README.md)
+- User manual: [README.md](./README.md) — keep it in sync with user-visible behaviour (it is shipped as `README.pdf` in every release)
+- Build instructions, project layout, architecture, network protocol, CI: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 ---
 
 ## Architecture — Beat-Synced Multi Oscilloscope
 
-This plugin is a beat-synced multi-instance oscilloscope that displays waveform data aligned to musical position (PPQ). Multiple plugin instances can share their waveform data over the local network.
+This plugin is a beat-synced multi-instance oscilloscope. It displays waveforms aligned to musical position (PPQ). Up to 8 plugin instances on the same machine share their waveforms over UDP multicast. The audio passes through unchanged. See [CONTRIBUTING.md](./CONTRIBUTING.md#architecture) for the full description.
 
 ### Core Components
 
-1. **BeatSyncBuffer** (`lib/audio/BeatSyncBuffer.h`): Position-indexed display buffer that maps audio samples to musical time positions [0, 1). Each bin corresponds to a fractional beat position. Audio-thread writes, UI-thread reads.
+Shared building blocks come from `phu-audio-lib/` (fetched by CMake, git-ignored — change them in the phu-audio-lib repository, not here):
 
-2. **AudioSampleFifo** (`lib/audio/AudioSampleFifo.h`): Lock-free FIFO for transferring audio samples from the audio thread to the UI thread. Uses JUCE AbstractFifo for single-writer/single-reader indexing.
+1. **PpqAddressedRingBuffer** (`phu-audio-lib/audio/PpqAddressedRingBuffer.h`): Position-addressed overwrite ring buffer. A sample at absolute PPQ `p` is written to index `fmod(p, range) / range × N`.
+2. **BucketSet** (`phu-audio-lib/audio/BucketSet.h`): Dirty-tracked bucket partitioning of a buffer. Used for the RMS (1/16 beat) and cancellation (~4 ms, max 256) overlays.
+3. **LinkwitzRileyFilter** (`phu-audio-lib/audio/LinkwitzRileyFilter.h`): The 48 dB/oct HP/LP display filters.
+4. **SyncGlobals** (`phu-audio-lib/events/SyncGlobals.h`): DAW state (BPM, PPQ, transport, sample rate). Audio-thread writes, UI-thread reads via atomic PPQ.
+5. **MulticastBroadcasterBase / SampleBroadcaster / CtrlBroadcaster** (`phu-audio-lib/network/`): UDP multicast sockets and the two protocols (samples on port 49422, control on port 49423).
+6. **GLRendererBase / GLSnapshotRenderer / GLSLShaderBuilder** (`phu-audio-lib/gl/`): OpenGL helpers.
 
-3. **SyncGlobals** (`lib/events/SyncGlobals.h`): DAW synchronization state tracking (BPM, PPQ, transport). Audio-thread updates, UI-thread reads via atomic PPQ.
+Project code in `src/`:
 
-4. **SampleBroadcaster** (`lib/network/SampleBroadcaster.h/.cpp`): UDP multicast broadcaster/receiver for sharing beat-synced waveform data between plugin instances. Extends the MulticastBroadcasterBase pattern from phu-splitter. Packets include PPQ reference for beat-sync alignment.
-
-5. **MulticastBroadcasterBase** (`lib/network/MulticastBroadcasterBase.h/.cpp`): Abstract base class providing UDP multicast infrastructure (sockets, receiver thread, platform abstraction).
-
-6. **ScopeDisplay** (`src/ScopeDisplay.h/.cpp`): Beat-synced oscilloscope display component. Renders local and remote waveform data with dB-scale Y axis and beat-position X axis.
+7. **PluginProcessor** (`src/PluginProcessor.h/.cpp`): `processBlock`, ping-pong broadcast slots, SPSC local ring, APVTS parameters, state, and a 30 Hz timer for CTRL heartbeats and peer commands.
+8. **PluginEditor** (`src/PluginEditor.h/.cpp`): Fixed-size UI and the 60 Hz timer that feeds the display.
+9. **ScopeDisplay** (`src/ScopeDisplay.h/.cpp`): Up to 8 instance slots (slot = channel number − 1), filtering, overlays, software fallback painting.
+10. **ScopeGLCoordinator and sub-renderers** (`src/gl/`): OpenGL drawing of waveforms, grid, playhead, RMS and cancellation bar.
 
 ### Data Flow
 
 ```
 Audio Thread (processBlock)
   ├─ Update DAW globals (BPM, PPQ, transport)
-  ├─ Push samples to input FIFO (for UI)
-  └─ Write BeatSyncBuffer (PPQ → normalized position → bin)
+  ├─ Mix to mono; push (sample, absolute PPQ) pairs to the local SPSC ring
+  └─ If broadcasting: fill the ping-pong slot; when full (~33 ms)
+       → SampleBroadcaster::broadcastRawSamples() (loopback sendto)
 
-Processor Timer (~10 Hz)
-  └─ If broadcast enabled: send BeatSyncBuffer data via SampleBroadcaster
+Processor Timer (30 Hz, also without editor)
+  └─ CTRL heartbeat, peer commands, channel index sync
 
 UI Timer (60 Hz)
-  ├─ Read local BeatSyncBuffer → ScopeDisplay
-  ├─ Read remote data from SampleBroadcaster → ScopeDisplay (if toggle on)
-  └─ Repaint oscilloscope
+  ├─ Drain local ring → HP/LP filter → PpqAddressedRingBuffer[local]
+  ├─ SampleBroadcaster::getReceivedPackets() → HP/LP filter → PpqAddressedRingBuffer[channel-1]
+  ├─ ScopeDisplay::computeFrame() (dirty RMS / cancellation buckets, display bins)
+  └─ Hand off to ScopeGLCoordinator and repaint
 ```
 
 ### Network Protocol
 
-- **Multicast Group**: 239.255.42.1 (administratively scoped, local network)
-- **Port**: 49423 (separate from phu-splitter spectrum port 49421)
-- **Packet**: SamplePacket with PPQ position, BPM, display range, and dB-quantized waveform data
-- **Rate**: ~30 Hz (33ms throttle)
-- **Staleness**: Remote instances silent > 3s are automatically pruned
+- **Multicast Group**: 239.255.42.1, TTL 1 — instances on the same machine only
+- **Sample port**: 49422 (`RawSamplesPacket`: raw mono floats + PPQ of first sample + BPM + sequence number)
+- **Control port**: 49423 (`CtrlPacket`: channel index, label, colour, sample rate; `Announce`, `LabelChange`, `RangeChange`, `Goodbye`, `PeersBroadcastOnly`)
+- **Rate**: one sample packet per ~33 ms; CTRL heartbeat adaptive 5–12 s
+- **Staleness**: sample data silent > 3 s is pruned; CTRL info > 30 s (or on `Goodbye`)
+- **Not used**: port 49421 belongs to the spectrum broadcaster of phu-splitter
 
 ### Hard Rules
 
-- **NEVER perform network I/O on the audio thread.** Broadcasting is driven by a timer.
-- **Network send/receive happens on the UI thread** (timer callbacks and receiver thread reads are consumed on UI thread via getReceivedSamples()).
-- **BeatSyncBuffer writes are audio-thread safe** (single float stores are naturally atomic on x86/x64).
-- **All PPQ calculations must use the DAW-provided position** from getPlayHead()->getPosition().
-- **MUST work without assumptions about BPM and Sample Rate**. Plugin must support common samplerates from 44.1khz, 48khz, 96khz and if possible 192khz as well. plugin must support bpms beginning from 40 bpm and above
+- Follow `.github/instructions/audio-thread-safety.instructions.md`: no allocation, locks, file/console I/O or exceptions on the audio thread.
+- **The only network call on the audio thread is `SampleBroadcaster::broadcastRawSamples()`** (lock-free loopback `sendto()` from pre-allocated slots). Everything else — socket setup, receiving, CTRL packets — runs on the message thread or the receiver threads. Never add a receive call or another send path to the audio thread.
+- **All PPQ calculations must use the DAW-provided position** from `getPlayHead()->getPosition()`.
+- **MUST work without assumptions about BPM and sample rate**: 44.1 kHz up to 192 kHz, tempos from 40 BPM upwards.
+- **Channel numbers are slot indices**: instances talking to each other need unique channels; a remote packet claiming the local channel is ignored.
+- **Display filters affect only the display path**, never the audio.

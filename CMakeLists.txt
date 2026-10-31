@@ -38,4 +38,7 @@ target_link_libraries(BeatSyncLib INTERFACE
 )
 
 add_subdirectory(src)
+
+# enable_testing() must be in the top-level CMakeLists.txt so that `ctest` works from the build root
+enable_testing()
 add_subdirectory(tests)

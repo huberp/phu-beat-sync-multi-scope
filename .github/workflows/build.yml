@@ -20,6 +20,9 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
+      - name: Unit tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
       - name: Download pluginval
         shell: pwsh
         run: |
@@ -143,43 +146,28 @@ jobs:
           echo "Validation passed successfully"
 
   build-linux:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    - name: Install Dependencies
-      run: sudo bash scripts/install-linux-deps.sh
-    - name: Configure CMake
-      run: cmake --preset linux-x64-vst3-release
-    - name: Build
-      run: cmake --build --preset linux-x64-vst3-release-build
+    uses: ./.github/workflows/_build-plugin.yml
+    with:
+      platform: linux
+      configure-preset: linux-x64-vst3-release
+      build-preset: linux-x64-vst3-release-build
+      test-dir: build/linux-x64-vst3-release
 
   build-macos-intel:
-    runs-on: macos-latest
     permissions:
       contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Configure CMake (x86_64)
-        run: cmake --preset macos-x64-release
-      - name: Build (x86_64)
-        run: cmake --build --preset macos-x64-release-build
+    uses: ./.github/workflows/_build-plugin.yml
+    with:
+      platform: macos
+      configure-preset: macos-x64-release
+      build-preset: macos-x64-release-build
 
   build-macos-arm64:
-    runs-on: macos-latest
     permissions:
       contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Configure CMake (arm64)
-        run: cmake --preset macos-arm64-release
-      - name: Build (arm64)
-        run: cmake --build --preset macos-arm64-release-build
+    uses: ./.github/workflows/_build-plugin.yml
+    with:
+      platform: macos
+      configure-preset: macos-arm64-release
+      build-preset: macos-arm64-release-build
+      test-dir: build/macos-arm64-release

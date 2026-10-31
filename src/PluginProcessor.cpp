@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "DisplayRangeLimits.h"
 #include "network/SampleBroadcaster.h"
 #include <chrono>
 #include <cmath>
@@ -144,10 +145,7 @@ void PhuBeatSyncMultiScopeAudioProcessor::syncInstanceIndexToBroadcasters() {
 // ============================================================================
 
 double PhuBeatSyncMultiScopeAudioProcessor::getMaxDisplayBeatsForBpm(double bpm) {
-    if (bpm >= 80.0) return 8.0;
-    if (bpm >= 60.0) return 4.0;
-    if (bpm >= 40.0) return 2.0;
-    return 1.0;
+    return phu::display::getMaxDisplayBeatsForBpm(bpm);
 }
 
 // ============================================================================
