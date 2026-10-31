@@ -1,0 +1,191 @@
+name: Build Linux (reusable)
+
+# Reusable workflow called by build.yml.
+# Handles: CMake configure+build for VST3, optional pluginval validation.
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        description: 'Target architecture — x64 or arm64'
+        type: string
+        default: 'x64'
+      run-pluginval:
+        description: 'Run pluginval validation after build (VST3 only)'
+        type: boolean
+        default: false
+      upload-artifact:
+        description: 'Upload the packaged plugin as a workflow artifact'
+        type: boolean
+        default: false
+      artifact-name:
+        description: 'Name of the uploaded artifact (used when upload-artifact is true)'
+        type: string
+        default: 'linux-plugin'
+      ref-name:
+        description: >
+          Git ref name (e.g. the tag) used for package file naming.
+          When empty the packaging step is skipped.
+        type: string
+        default: ''
+    outputs:
+      validation-status:
+        description: 'pluginval result: passed | failed | no_plugin | no_pluginval | skipped (empty when validation is not run)'
+        value: ${{ jobs.build.outputs.validation-status }}
+
+jobs:
+  build:
+    # Keep the runner architecture aligned with the plugin target so pluginval can load it.
+    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+
+    outputs:
+      validation-status: ${{ steps.validate.outputs.validation_status }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Dependencies
+        run: sudo bash scripts/install-linux-deps.sh
+
+      - name: Configure CMake
+        run: cmake --preset linux-${{ inputs.arch }}-vst3-release
+
+      - name: Build
+        run: cmake --build --preset linux-${{ inputs.arch }}-vst3-release-build
+
+      # -----------------------------------------------------------------------
+      # Validation (optional, VST3 only)
+      # -----------------------------------------------------------------------
+      - name: Install pluginval runtime dependencies
+        if: ${{ inputs.run-pluginval }}
+        run: sudo apt-get install -y xvfb unzip
+
+      - name: Download pluginval
+        if: ${{ inputs.run-pluginval }}
+        run: |
+          curl -fsSL \
+            "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip" \
+            -o pluginval.zip
+          unzip -q pluginval.zip -d pluginval
+          chmod +x pluginval/pluginval
+
+      - name: Validate VST3 Plugin
+        if: ${{ inputs.run-pluginval }}
+        id: validate
+        run: |
+          set +e
+
+          BUILD_PRESET_DIR="build/linux-${{ inputs.arch }}-vst3-release"
+          VST3_PATH=$(find "$BUILD_PRESET_DIR" -name "*.vst3" -type d | head -n 1)
+
+          if [ -z "$VST3_PATH" ]; then
+            echo "ERROR: VST3 plugin not found!"
+            echo "validation_status=no_plugin" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Found VST3 plugin at: $VST3_PATH"
+
+          PLUGINVAL_BIN="./pluginval/pluginval"
+          if [ ! -f "$PLUGINVAL_BIN" ]; then
+            echo "ERROR: pluginval binary not found at $PLUGINVAL_BIN"
+            echo "validation_status=no_pluginval" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mkdir -p ./validation-results
+
+          xvfb-run -a "$PLUGINVAL_BIN" \
+            --strictness-level 5 \
+            --validate-in-process \
+            --output-dir ./validation-results \
+            --validate "$VST3_PATH" 2>&1 | \
+            tee ./validation-results/console-output.txt
+
+          if [ "${PIPESTATUS[0]}" -eq 0 ]; then
+            echo "validation_status=passed" >> "$GITHUB_OUTPUT"
+          else
+            echo "validation_status=failed" >> "$GITHUB_OUTPUT"
+          fi
+
+          exit 0
+
+      - name: Upload Validation Results
+        uses: actions/upload-artifact@v7
+        if: ${{ always() && inputs.run-pluginval }}
+        with:
+          name: validation-results-linux-${{ inputs.arch }}
+          path: ./validation-results/
+
+      - name: Add Validation Summary
+        if: ${{ always() && inputs.run-pluginval }}
+        run: |
+          STATUS="${{ steps.validate.outputs.validation_status }}"
+          ARCH="${{ inputs.arch }}"
+
+          echo "## Linux Plugin Validation Results (${ARCH})" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          case "$STATUS" in
+            passed)       echo "### ✅ Validation Passed" ;;
+            failed)       echo "### ❌ Validation Failed" ;;
+            no_plugin)    echo "### ⚠️ Plugin Not Found" ;;
+            no_pluginval) echo "### ⚠️ Pluginval Not Found" ;;
+            *)            echo "### ⚠️ No Results" ;;
+          esac >> "$GITHUB_STEP_SUMMARY"
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f "./validation-results/console-output.txt" ]; then
+            echo "#### Validation Report (first 50 lines):" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            head -n 50 ./validation-results/console-output.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Fail Build on Validation Failure
+        if: ${{ always() && inputs.run-pluginval }}
+        run: |
+          STATUS="${{ steps.validate.outputs.validation_status }}"
+          case "$STATUS" in
+            failed|no_plugin|no_pluginval)
+              echo "Build failed: plugin validation status = $STATUS"
+              exit 1
+              ;;
+          esac
+          echo "Validation passed successfully"
+
+      # -----------------------------------------------------------------------
+      # Package (only when a ref-name is provided, i.e. release builds)
+      # -----------------------------------------------------------------------
+      - name: Package Plugin
+        if: ${{ inputs.ref-name != '' }}
+        run: |
+          VERSION="${{ inputs.ref-name }}"
+          VERSION="${VERSION#v}"
+          ARCH="${{ inputs.arch }}"
+          ZIP_NAME="PHU-BEAT-SYNC-MULTI-SCOPE-linux-${ARCH}-${VERSION}.zip"
+
+          mkdir -p dist
+
+          BUILD_PRESET_DIR="build/linux-${ARCH}-vst3-release"
+          VST3_PATH=$(find "$BUILD_PRESET_DIR" -name "*.vst3" -type d | head -n 1)
+
+          if [ -z "$VST3_PATH" ]; then
+            echo "ERROR: VST3 bundle not found in $BUILD_PRESET_DIR"
+            exit 1
+          fi
+
+          echo "Packaging: $VST3_PATH"
+          (cd "$(dirname "$VST3_PATH")" && zip -r "$GITHUB_WORKSPACE/dist/$ZIP_NAME" \
+            "$(basename "$VST3_PATH")")
+
+      - name: Upload Plugin Artifact
+        if: ${{ inputs.upload-artifact }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: dist/*.zip

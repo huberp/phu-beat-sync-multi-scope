@@ -70,8 +70,8 @@ A beat-synced oscilloscope that you load on several DAW tracks at once. Every in
 
 **Windows:** Requires the [Microsoft Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe). Already present if Visual Studio 2019 or 2022 is installed.  
 **Linux:** No external dependencies — the binary is self-contained.  
-**macOS Intel:** Download the `macos-intel-x86_64` release for Mac computers with an Intel processor.  
-**macOS Apple Silicon:** Download the `macos-apple-silicon-arm64` release for Mac computers with an M-series chip.
+**macOS Intel:** Download the `macos-x64` release for Mac computers with an Intel processor.  
+**macOS Apple Silicon:** Download the `macos-arm64` release for Mac computers with an M-series chip.
 
 The plugin is **stereo in / stereo out**. It mixes the input to mono for display and broadcasting, and supports sample rates from 44.1 kHz up to 192 kHz and tempos from 40 BPM upwards. To build from source, see [CONTRIBUTING.md](CONTRIBUTING.md#building).
 

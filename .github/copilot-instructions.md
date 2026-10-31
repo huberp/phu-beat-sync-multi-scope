@@ -21,6 +21,10 @@ If builds timeout:
 
 Project unit tests live in `tests/` (`test_display_range.cpp` tests the JUCE-free `src/DisplayRangeLimits.h`). Build the `test_display_range` target and run `ctest --test-dir build/<preset> -C Release --output-on-failure`. Tests for the shared `PpqAddressedRingBuffer`/`BucketSet` and other phu-audio-lib headers live in the phu-audio-lib repo (https://github.com/huberp/phu-audio-lib, `tests/` folder); changes to those classes must be tested there.
 
+### CI and releases
+
+`build.yml` (push/PR) and `release.yml` call per-platform reusable workflows (`build-windows-vst3.yml`, `build-linux.yml`, `build-macos.yml`) that build via the CMake presets; `release.yml` also calls `generate-pdf.yml`. A release is triggered by pushing a tag `v[0-9]*` or by running `release.yml` manually with the required `tag` input (the tag is then created on the selected commit). Details in CONTRIBUTING.md.
+
 ### Documentation
 
 - User manual: [README.md](./README.md) — keep it in sync with user-visible behaviour (it is shipped as `README.pdf` in every release)
