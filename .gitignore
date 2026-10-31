@@ -2,6 +2,10 @@
 build/
 cmake-build-*/
 
+# Fetched by CMake (FetchContent)
+JUCE/
+phu-audio-lib/
+
 # IDE files
 .vs/
 .vscode/

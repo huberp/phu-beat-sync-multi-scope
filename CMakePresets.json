@@ -1,107 +1,311 @@
 {
   "version": 5,
+  "vendor": {
+    "phu/documentation": {
+      "layout": "Configure presets are composed from hidden mixins: os-<platform>-<arch> + build-<type> + formats-<set>. Only the composed (visible) presets are meant to be used directly.",
+      "formats": "PHU_PLUGIN_FORMATS (read by src/CMakeLists.txt) is the JUCE FORMATS list. Windows/Linux use formats-vst3; macOS uses formats-vst3-au, so one configure and one build yields VST3 and AU for that architecture.",
+      "macos": "cmake --preset macos-arm64-release && cmake --build --preset macos-arm64-release-build. Single-format builds: macos-arm64-release-build-vst3 / -au (same configure preset).",
+      "newFormat": "Add a formats-* mixin and inherit it from the desired visible presets."
+    }
+  },
   "cmakeMinimumRequired": {
     "major": 3,
-    "minor": 23,
+    "minor": 28,
     "patch": 0
   },
   "configurePresets": [
     {
-      "name": "vs2026-x64",
-      "displayName": "Visual Studio 2026 (x64)",
-      "generator": "Visual Studio 18 2026",
-      "binaryDir": "${sourceDir}/build/vs2026-x64",
-      "architecture": {
-        "value": "x64"
-      },
+      "name": "base",
+      "hidden": true,
+      "displayName": "Base Configuration",
       "cacheVariables": {
-        "CMAKE_CXX_STANDARD": "17",
+        "CMAKE_CXX_STANDARD": "20",
         "CMAKE_CXX_STANDARD_REQUIRED": "ON"
       }
     },
+
     {
-      "name": "linux-release",
-      "displayName": "Linux Release",
-      "generator": "Unix Makefiles",
-      "binaryDir": "${sourceDir}/build/linux-release",
+      "name": "build-debug",
+      "hidden": true,
+      "displayName": "Debug Build Type",
+      "inherits": ["base"],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "build-release",
+      "hidden": true,
+      "displayName": "Release Build Type",
+      "inherits": ["base"],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_CXX_STANDARD": "17",
-        "CMAKE_CXX_STANDARD_REQUIRED": "ON"
+        "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON"
       }
     },
     {
-      "name": "macos-x86_64-release",
-      "displayName": "macOS Intel Release (x86_64)",
-      "generator": "Xcode",
-      "binaryDir": "${sourceDir}/build/macos-x86_64-release",
+      "name": "build-release-windows",
+      "hidden": true,
+      "displayName": "Windows Release Optimization",
+      "inherits": ["build-release"],
       "cacheVariables": {
-        "CMAKE_CXX_STANDARD": "17",
-        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+        "CMAKE_EXE_LINKER_FLAGS_RELEASE": "/LTCG",
+        "CMAKE_SHARED_LINKER_FLAGS_RELEASE": "/LTCG",
+        "CMAKE_MODULE_LINKER_FLAGS_RELEASE": "/LTCG",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O2 -GL -DNDEBUG"
+      }
+    },
+    {
+      "name": "build-release-unix",
+      "hidden": true,
+      "displayName": "Unix Release Optimization",
+      "inherits": ["build-release"],
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG"
+      }
+    },
+
+    {
+      "name": "os-windows-x64",
+      "hidden": true,
+      "displayName": "Windows x64",
+      "inherits": ["base"],
+      "generator": "Visual Studio 18 2026",
+      "architecture": {
+        "value": "x64"
+      }
+    },
+    {
+      "name": "os-windows-arm64",
+      "hidden": true,
+      "displayName": "Windows ARM64",
+      "inherits": ["base"],
+      "generator": "Visual Studio 18 2026",
+      "architecture": {
+        "value": "ARM64"
+      }
+    },
+    {
+      "name": "os-linux-x64",
+      "hidden": true,
+      "displayName": "Linux x64",
+      "inherits": ["base"],
+      "generator": "Unix Makefiles",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-march=x86-64",
+        "CMAKE_CXX_FLAGS": "-march=x86-64",
+        "CMAKE_SYSTEM_PROCESSOR": "x86_64"
+      }
+    },
+    {
+      "name": "os-linux-arm64",
+      "hidden": true,
+      "displayName": "Linux ARM64",
+      "inherits": ["base"],
+      "generator": "Unix Makefiles",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-march=armv8-a",
+        "CMAKE_CXX_FLAGS": "-march=armv8-a",
+        "CMAKE_SYSTEM_PROCESSOR": "aarch64"
+      }
+    },
+    {
+      "name": "os-macos-x64",
+      "hidden": true,
+      "displayName": "macOS x86_64",
+      "inherits": ["base"],
+      "generator": "Xcode",
+      "cacheVariables": {
         "CMAKE_OSX_ARCHITECTURES": "x86_64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
       }
     },
     {
-      "name": "macos-arm64-release",
-      "displayName": "macOS Apple Silicon Release (arm64)",
+      "name": "os-macos-arm64",
+      "hidden": true,
+      "displayName": "macOS arm64",
+      "inherits": ["base"],
       "generator": "Xcode",
-      "binaryDir": "${sourceDir}/build/macos-arm64-release",
       "cacheVariables": {
-        "CMAKE_CXX_STANDARD": "17",
-        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
         "CMAKE_OSX_ARCHITECTURES": "arm64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
+      }
+    },
+
+    {
+      "name": "formats-vst3",
+      "hidden": true,
+      "displayName": "VST3 only",
+      "description": "Mixin: builds VST3 only (Windows, Linux).",
+      "cacheVariables": {
+        "PHU_PLUGIN_FORMATS": "VST3"
+      }
+    },
+    {
+      "name": "formats-vst3-au",
+      "hidden": true,
+      "displayName": "VST3 + AU",
+      "description": "Mixin: builds VST3 and AU from one configure/build (macOS only). Shared code is compiled once.",
+      "cacheVariables": {
+        "PHU_PLUGIN_FORMATS": "VST3;AU"
+      }
+    },
+
+    {
+      "name": "windows-x64-vst3-release",
+      "displayName": "Windows x64 VST3 Release",
+      "inherits": ["os-windows-x64", "build-release-windows", "formats-vst3"],
+      "binaryDir": "${sourceDir}/build/windows-x64-vst3-release"
+    },
+    {
+      "name": "windows-arm64-vst3-release",
+      "displayName": "Windows ARM64 VST3 Release",
+      "inherits": ["os-windows-arm64", "build-release-windows", "formats-vst3"],
+      "binaryDir": "${sourceDir}/build/windows-arm64-vst3-release"
+    },
+    {
+      "name": "windows-x64-vst3-debug",
+      "displayName": "Windows x64 VST3 Debug",
+      "inherits": ["os-windows-x64", "build-debug", "formats-vst3"],
+      "binaryDir": "${sourceDir}/build/windows-x64-vst3-debug"
+    },
+
+    {
+      "name": "linux-x64-vst3-release",
+      "displayName": "Linux x64 VST3 Release",
+      "inherits": ["os-linux-x64", "build-release-unix", "formats-vst3"],
+      "binaryDir": "${sourceDir}/build/linux-x64-vst3-release"
+    },
+    {
+      "name": "linux-arm64-vst3-release",
+      "displayName": "Linux ARM64 VST3 Release",
+      "inherits": ["os-linux-arm64", "build-release-unix", "formats-vst3"],
+      "binaryDir": "${sourceDir}/build/linux-arm64-vst3-release"
+    },
+
+    {
+      "name": "macos-arm64-release",
+      "displayName": "macOS ARM64 VST3+AU Release",
+      "inherits": ["os-macos-arm64", "build-release-unix", "formats-vst3-au"],
+      "binaryDir": "${sourceDir}/build/macos-arm64-release"
+    },
+    {
+      "name": "macos-arm64-debug",
+      "displayName": "macOS ARM64 VST3+AU Debug",
+      "inherits": ["os-macos-arm64", "build-debug", "formats-vst3-au"],
+      "binaryDir": "${sourceDir}/build/macos-arm64-debug"
+    },
+    {
+      "name": "macos-x64-release",
+      "displayName": "macOS x86_64 VST3+AU Release",
+      "inherits": ["os-macos-x64", "build-release-unix", "formats-vst3-au"],
+      "binaryDir": "${sourceDir}/build/macos-x64-release"
+    },
+    {
+      "name": "macos-x64-debug",
+      "displayName": "macOS x86_64 VST3+AU Debug",
+      "inherits": ["os-macos-x64", "build-debug", "formats-vst3-au"],
+      "binaryDir": "${sourceDir}/build/macos-x64-debug"
+    },
+
+    {
+      "name": "sanitizers",
+      "displayName": "Sanitizers Build (Address + Undefined Behavior)",
+      "inherits": ["base"],
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/sanitizers",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ENABLE_SANITIZERS": "ON"
+      }
+    },
+
+    {
+      "name": "coverage",
+      "displayName": "Coverage Build",
+      "inherits": ["base"],
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/coverage",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ENABLE_COVERAGE": "ON"
       }
     }
   ],
   "buildPresets": [
     {
-      "name": "debug",
-      "displayName": "Build Debug",
-      "configurePreset": "vs2026-x64",
-      "configuration": "Debug",
-      "targets": [
-        "phu-beat-sync-multi-scope_VST3"
-      ]
+      "name": "windows-x64-vst3-release-build",
+      "displayName": "Build Windows x64 VST3 Release",
+      "configurePreset": "windows-x64-vst3-release",
+      "configuration": "Release"
     },
     {
-      "name": "release",
-      "displayName": "Build Release",
-      "configurePreset": "vs2026-x64",
-      "configuration": "Release",
-      "targets": [
-        "phu-beat-sync-multi-scope_VST3"
-      ]
+      "name": "windows-arm64-vst3-release-build",
+      "displayName": "Build Windows ARM64 VST3 Release",
+      "configurePreset": "windows-arm64-vst3-release",
+      "configuration": "Release"
     },
     {
-      "name": "linux-build",
-      "displayName": "Linux Build",
-      "configurePreset": "linux-release",
-      "configuration": "Release",
-      "targets": [
-        "phu-beat-sync-multi-scope_VST3"
-      ]
+      "name": "windows-x64-vst3-debug-build",
+      "displayName": "Build Windows x64 VST3 Debug",
+      "configurePreset": "windows-x64-vst3-debug",
+      "configuration": "Debug"
+    },
+
+    {
+      "name": "linux-x64-vst3-release-build",
+      "displayName": "Build Linux x64 VST3 Release",
+      "configurePreset": "linux-x64-vst3-release"
     },
     {
-      "name": "macos-x86_64-build",
-      "displayName": "macOS Intel Build (x86_64)",
-      "configurePreset": "macos-x86_64-release",
-      "configuration": "Release",
-      "targets": [
-        "phu-beat-sync-multi-scope_VST3",
-        "phu-beat-sync-multi-scope_AU"
-      ]
+      "name": "linux-arm64-vst3-release-build",
+      "displayName": "Build Linux ARM64 VST3 Release",
+      "configurePreset": "linux-arm64-vst3-release"
+    },
+
+    {
+      "name": "macos-arm64-release-build",
+      "displayName": "Build macOS ARM64 VST3+AU Release",
+      "configurePreset": "macos-arm64-release"
     },
     {
-      "name": "macos-arm64-build",
-      "displayName": "macOS Apple Silicon Build (arm64)",
+      "name": "macos-arm64-debug-build",
+      "displayName": "Build macOS ARM64 VST3+AU Debug",
+      "configurePreset": "macos-arm64-debug"
+    },
+    {
+      "name": "macos-x64-release-build",
+      "displayName": "Build macOS x86_64 VST3+AU Release",
+      "configurePreset": "macos-x64-release"
+    },
+    {
+      "name": "macos-x64-debug-build",
+      "displayName": "Build macOS x86_64 VST3+AU Debug",
+      "configurePreset": "macos-x64-debug"
+    },
+    {
+      "name": "macos-arm64-release-build-vst3",
+      "displayName": "Build macOS ARM64 VST3 only (Release)",
       "configurePreset": "macos-arm64-release",
-      "configuration": "Release",
-      "targets": [
-        "phu-beat-sync-multi-scope_VST3",
-        "phu-beat-sync-multi-scope_AU"
-      ]
+      "targets": ["phu-beat-sync-multi-scope_VST3"]
+    },
+    {
+      "name": "macos-arm64-release-build-au",
+      "displayName": "Build macOS ARM64 AU only (Release)",
+      "configurePreset": "macos-arm64-release",
+      "targets": ["phu-beat-sync-multi-scope_AU"]
+    },
+
+    {
+      "name": "sanitizers-build",
+      "displayName": "Build with Sanitizers",
+      "configurePreset": "sanitizers"
+    },
+
+    {
+      "name": "coverage-build",
+      "displayName": "Build with Coverage",
+      "configurePreset": "coverage"
     }
   ]
 }

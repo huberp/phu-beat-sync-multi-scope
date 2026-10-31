@@ -152,9 +152,9 @@ jobs:
     - name: Install Dependencies
       run: sudo bash scripts/install-linux-deps.sh
     - name: Configure CMake
-      run: cmake --preset linux-release
+      run: cmake --preset linux-x64-vst3-release
     - name: Build
-      run: cmake --build --preset linux-build
+      run: cmake --build --preset linux-x64-vst3-release-build
 
   build-macos-intel:
     runs-on: macos-latest
@@ -166,9 +166,9 @@ jobs:
         with:
           submodules: recursive
       - name: Configure CMake (x86_64)
-        run: cmake --preset macos-x86_64-release
+        run: cmake --preset macos-x64-release
       - name: Build (x86_64)
-        run: cmake --build --preset macos-x86_64-build
+        run: cmake --build --preset macos-x64-release-build
 
   build-macos-arm64:
     runs-on: macos-latest
@@ -182,4 +182,4 @@ jobs:
       - name: Configure CMake (arm64)
         run: cmake --preset macos-arm64-release
       - name: Build (arm64)
-        run: cmake --build --preset macos-arm64-build
+        run: cmake --build --preset macos-arm64-release-build

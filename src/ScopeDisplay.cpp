@@ -58,25 +58,33 @@ void ScopeDisplay::prepareInstance(InstanceSlot& inst) {
     if (inst.buffer.capacity() == 0)
         inst.buffer.reserveByWorstCase(kMinBpm, kMaxSampleRate, kMaxBeats);
 
+    const int oldN = inst.buffer.size();
     inst.buffer.prepare(m_displayRangeBeats, m_bpm, m_sampleRate);
     const int N = inst.buffer.size();
 
-    // Compute bucket counts matching the original formulas:
-    //   RMS:    ~16 buckets per beat (for 1/16-beat RMS display), capped at 128
-    //   Cancel: ~4 ms per bucket (ceil(sampleRate * 0.004)), capped at 256
-    const int rmsBucketCount = (m_displayRangeBeats > 0.0)
-        ? std::min(128, std::max(1, static_cast<int>(m_displayRangeBeats * 16.0)))
-        : 1;
-    const int cancelBucketSize = std::max(1, static_cast<int>(std::ceil(m_sampleRate * 0.004)));
-    const int cancelBucketCount = (N > 0)
-        ? std::min(256, std::max(1, (N + cancelBucketSize - 1) / cancelBucketSize))
-        : 0;
+    // Only rebuild bucket sets and clear display bins when the working buffer
+    // size actually changes.  Spurious prepare() calls (e.g. sub-0.01 BPM
+    // drift slipping past the editor tolerance) leave accumulated ring data
+    // intact so the waveform display continues to fill correctly.
+    const bool sizeChanged = (N != oldN) || inst.displayBins.empty();
+    if (sizeChanged) {
+        // Compute bucket counts matching the original formulas:
+        //   RMS:    ~16 buckets per beat (for 1/16-beat RMS display), capped at 128
+        //   Cancel: ~4 ms per bucket (ceil(sampleRate * 0.004)), capped at 256
+        const int rmsBucketCount = (m_displayRangeBeats > 0.0)
+            ? std::min(128, std::max(1, static_cast<int>(m_displayRangeBeats * 16.0)))
+            : 1;
+        const int cancelBucketSize = std::max(1, static_cast<int>(std::ceil(m_sampleRate * 0.004)));
+        const int cancelBucketCount = (N > 0)
+            ? std::min(256, std::max(1, (N + cancelBucketSize - 1) / cancelBucketSize))
+            : 0;
 
-    inst.rmsBuckets.initializeBySize(N, rmsBucketCount);
-    inst.cancelBuckets.initializeBySize(N, cancelBucketCount);
-    inst.rmsValues.assign(static_cast<size_t>(inst.rmsBuckets.bucketCount()), 0.0f);
-    inst.displayBins.assign(DISPLAY_BINS, 0.0f);
-    inst.lastWindowStart = -1e18;
+        inst.rmsBuckets.initializeBySize(N, rmsBucketCount);
+        inst.cancelBuckets.initializeBySize(N, cancelBucketCount);
+        inst.rmsValues.assign(static_cast<size_t>(inst.rmsBuckets.bucketCount()), 0.0f);
+        inst.displayBins.assign(DISPLAY_BINS, 0.0f);
+        inst.lastWindowStart = -1e18;
+    }
     updateInstanceFilter(inst);
 }
 
