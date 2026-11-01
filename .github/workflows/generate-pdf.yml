@@ -1,0 +1,63 @@
+name: Generate PDF
+
+on:
+  workflow_call:
+    inputs:
+      in-md:
+        description: Path to the input Markdown file
+        required: true
+        type: string
+    outputs:
+      pdf-path:
+        description: Path to the generated PDF file
+        value: ${{ jobs.generate-pdf.outputs.pdf-path }}
+  workflow_dispatch:
+    inputs:
+      in-md:
+        description: Path to the input Markdown file
+        required: true
+        type: string
+
+jobs:
+  generate-pdf:
+    name: Generate PDF from Markdown
+    runs-on: ubuntu-latest
+    outputs:
+      pdf-path: ${{ steps.generate.outputs.pdf-path }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up TinyTeX
+        uses: r-lib/actions/setup-tinytex@v2
+        with:
+          cache: true
+
+      - name: Install LaTeX SVG package
+        run: |
+          tlmgr update --self
+          tlmgr install svg fontspec unicode-math
+
+      - name: Install librsvg (for SVG support)
+        run: sudo apt-get install -y librsvg2-bin
+
+      - name: Install Pandoc
+        run: sudo apt-get update && sudo apt-get install -y pandoc
+
+      - name: Generate PDF
+        id: generate
+        run: |
+          INPUT="${{ inputs.in-md }}"
+          OUTPUT="${INPUT%.*}.pdf"
+          pandoc "$INPUT" -o "$OUTPUT" \
+              --pdf-engine=xelatex \
+              -V mainfont="DejaVu Serif" \
+              -V sansfont="DejaVu Sans" \
+              -V monofont="DejaVu Sans Mono"
+          echo "pdf-path=$OUTPUT" >> $GITHUB_OUTPUT
+
+      - name: Upload PDF artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: pdf
+          path: ${{ steps.generate.outputs.pdf-path }}

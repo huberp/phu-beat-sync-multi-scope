@@ -47,8 +47,9 @@ phu-beat-sync-multi-scope/
 ├── phu-audio-lib/                  Shared library, fetched by CMake (git-ignored, see below)
 ├── JUCE/                           Fetched by CMake (git-ignored)
 ├── .github/
-│   ├── workflows/                  build.yml (CI), release.yml (tagged releases),
-│   │                               _build-plugin.yml (reusable build job)
+│   ├── workflows/                  build.yml (CI), release.yml (tagged releases), reusable
+│   │                               per-platform workflows (build-windows-vst3.yml, build-linux.yml,
+│   │                               build-macos.yml) and generate-pdf.yml (README.md → README.pdf)
 │   ├── instructions/               Audio thread-safety rules for Copilot
 │   └── copilot-instructions.md     Project notes for Copilot
 └── scripts/install-linux-deps.sh
@@ -182,9 +183,10 @@ pluginval.exe --strictness-level 5 --validate-in-process --validate "<path to PH
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `build.yml` | push to `main`, pull requests, manual | Builds Windows (with unit tests and pluginval), Linux (with unit tests), macOS Intel and macOS Apple Silicon (with unit tests) |
-| `release.yml` | tag `v[0-9]*`, e.g. `v0.2.0` | Builds and packages Windows x64, Windows ARM64, Linux, macOS Intel and macOS Apple Silicon, renders `README.md` to `README.pdf` (pandoc + xelatex), injects it into every zip, and publishes a GitHub Release. Tags that contain a `-` (e.g. `v0.2.0-beta`) are marked as pre-release. |
-| `_build-plugin.yml` | called by `build.yml` (Linux and macOS jobs) | Reusable build job: configure preset, build preset, optional ctest run, optional artifact upload |
+| `build.yml` | push to `main`, pull requests, manual | Calls the per-platform reusable workflows: Windows x64 (with pluginval), Linux x64 and arm64, macOS Apple Silicon and macOS Intel (with pluginval); plus a `test` job that builds and runs the unit tests on Windows, Linux and macOS |
+| `release.yml` | tag push `v[0-9]*` (e.g. `v0.2.0`), or manual run with a **required** `tag` input | A `prepare` job validates the tag (and, for manual runs, creates and pushes it on the selected commit). Then it calls the reusable workflows to build and package Windows x64 (with pluginval), Windows ARM64, Linux x64, macOS Apple Silicon and macOS Intel, calls `generate-pdf.yml` to render `README.md` to `README.pdf` (pandoc + xelatex), injects it into every zip, and publishes a GitHub Release. Tags that contain a `-` (e.g. `v0.2.0-beta`) are marked as pre-release. |
+| `build-windows-vst3.yml`, `build-linux.yml`, `build-macos.yml` | called by `build.yml` and `release.yml` | Reusable per-platform workflows (inputs `arch`, `run-pluginval`, `upload-artifact`, `artifact-name`, `ref-name`; output `validation-status`): configure and build via the CMake presets, optional pluginval run, and — when `ref-name` is set — packaging into `PHU-BEAT-SYNC-MULTI-SCOPE-<os>-<arch>-<version>.zip` plus artifact upload |
+| `generate-pdf.yml` | called by `release.yml`, or manual | Converts a Markdown file (input `in-md`) to PDF with pandoc + xelatex and uploads it as the `pdf` artifact |
 
 Because `README.md` is converted to PDF, keep it to plain Markdown with relative image paths (`doc/…`).
 
